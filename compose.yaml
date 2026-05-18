@@ -1,0 +1,24 @@
+services:
+  db:
+    image: mysql:latest
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: mydb
+    ports:
+      - 3307:3306
+    volumes:
+      - my-db-volume:/var/lib/mysql
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - 8080:80
+    depends_on:
+      - db
+
+volumes:
+  my-db-volume:
