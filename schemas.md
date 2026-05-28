@@ -14,7 +14,7 @@ CREATE TABLE problems (
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
     memory_kb BIGINT
-)
+);
 ```
 
 ### submissions
@@ -40,5 +40,5 @@ CREATE TABLE submissions (
 CREATE TABLE users (
     user_id BIGINT PRIMARY KEY,
     user_name VARCHAR(255) NOT NULL
-)
+);
 ```
