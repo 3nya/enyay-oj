@@ -9,7 +9,10 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_url = env::var("DB_URL")?;
     let pool = connect_database(db_url).await
         .expect("Could not connect to database");
-    create_user("Bob", &pool).await.expect("pls bro");
+    match create_user("Enya", &pool).await {
+        Ok(()) => println!("User created"),
+        Err(_) => println!("User failed to be created")
+    }
     Ok(())
 }
 
