@@ -38,7 +38,7 @@ CREATE TABLE submissions (
 ### users
 ```sql
 CREATE TABLE users (
-    user_id BIGINT PRIMARY KEY,
+    user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_name VARCHAR(255) NOT NULL
 );
 ```
