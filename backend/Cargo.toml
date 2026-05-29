@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 sqlx = { version ="0.8.6", features = ["mysql", "runtime-tokio", "macros", "time"] }
 tokio = { version = "1.52.3", features = ["full"]}
+dotenv = "0.15.0"
+uuid = { version = "1.23.1", features = ["v7"] }
