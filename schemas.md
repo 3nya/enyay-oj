@@ -39,6 +39,6 @@ CREATE TABLE submissions (
 ```sql
 CREATE TABLE users (
     user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_name VARCHAR(255) NOT NULL
+    user_name VARCHAR(255) UNIQUE NOT NULL
 );
 ```
