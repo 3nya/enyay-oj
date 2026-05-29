@@ -1,14 +1,15 @@
 use std::{fmt, str::FromStr};
 
+use serde::Serialize;
 use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct User {
     pub user_id: i64,
     pub user_name: String,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Problem {
     pub problem_id: i64,
     pub problem_name: String,
@@ -16,7 +17,7 @@ pub struct Problem {
     pub memory_kb: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Submission {
     pub submission_id: i64,
     pub user_id: i64,
@@ -157,6 +158,39 @@ pub async fn insert_problem(
     Ok(last_insert_id(result))
 }
 
+pub async fn get_problem(
+    pool: &MySqlPool,
+    problem_id: i64,
+) -> Result<Option<Problem>, sqlx::Error> {
+    sqlx::query_as::<_, Problem>(
+        r#"
+        SELECT problem_id, problem_name, runtime_ms, memory_kb
+        FROM problems
+        WHERE problem_id = ?
+        "#,
+    )
+    .bind(problem_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_recent_problems(
+    pool: &MySqlPool,
+    limit: i64,
+) -> Result<Option<Problem>, sqlx::Error> {
+    sqlx::query_as::<_, Problem>(
+        r#"
+        SELECT problem_id, problem_name, runtime_ms, memory_kb
+        FROM problems
+        ORDER BY problem_id ASC
+        LIMIT ?
+        "#,
+    )
+    .bind(limit)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn insert_submission(
     pool: &MySqlPool,
     user_id: i64,
@@ -185,6 +219,55 @@ pub async fn insert_submission(
     .await?;
 
     Ok(last_insert_id(result))
+}
+
+pub async fn get_submission(
+    pool: &MySqlPool,
+    submission_id: i64,
+) -> Result<Option<Submission>, sqlx::Error> {
+    sqlx::query_as::<_, Submission>(
+        r#"
+        SELECT
+            submission_id,
+            user_id,
+            problem_id,
+            verdict,
+            runtime_ms,
+            memory_kb,
+            language,
+            source_code
+        FROM submissions
+        WHERE submission_id = ?
+        "#,
+    )
+    .bind(submission_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_recent_submissions(
+    pool: &MySqlPool,
+    limit: i64,
+) -> Result<Vec<Submission>, sqlx::Error> {
+    sqlx::query_as::<_, Submission>(
+        r#"
+        SELECT
+            submission_id,
+            user_id,
+            problem_id,
+            verdict,
+            runtime_ms,
+            memory_kb,
+            language,
+            source_code
+        FROM submissions
+        ORDER BY submitted_time DESC, submission_id DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn insert_submission_with_id(
