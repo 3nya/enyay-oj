@@ -20,27 +20,6 @@ pub async fn main(){
     //println!("{:?}",compile);
 }   
 
-#[allow(dead_code)]
-async fn run_code(file_name:&str) -> Result<ExitStatus,Error>{
-    let compile = Command::new("gcc")
-        .current_dir("user_input")
-        .arg(file_name)
-        .arg("-o")
-        .arg("executable/a.out")
-        .status()
-        .await
-        .expect("Failed to execute");
-    if compile.success() {
-        let _child = Command::new("./a.out")
-        .current_dir("user_input/executable")
-        .spawn()
-        .expect("Failed");
-    } else{
-        println!("Just put the fries in the bags bro");
-    }
-    Ok(compile)
-}
-
 async fn run_with_docker(question:&Problem, file_name: &str, volume_mount: &str) {
     let compile = Command::new("docker")
         .args(["run","--rm"])

@@ -13,7 +13,7 @@ CREATE TABLE problems (
     problem_id BIGINT PRIMARY KEY,
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
-    memory_kb BIGINT
+    memory_mb BIGINT
 );
 ```
 
@@ -27,7 +27,7 @@ CREATE TABLE submissions (
     
     verdict VARCHAR(255),
     runtime_ms BIGINT,
-    memory_kb BIGINT,
+    memory_mb BIGINT,
     
     source_code VARCHAR(255),
     
