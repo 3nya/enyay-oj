@@ -177,7 +177,7 @@ pub async fn get_problem(
 pub async fn get_recent_problems(
     pool: &MySqlPool,
     limit: i64,
-) -> Result<Option<Problem>, sqlx::Error> {
+) -> Result<Vec<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
         SELECT problem_id, problem_name, runtime_ms, memory_kb
@@ -187,7 +187,7 @@ pub async fn get_recent_problems(
         "#,
     )
     .bind(limit)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
 }
 

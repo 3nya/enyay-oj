@@ -195,8 +195,8 @@ async fn get_problem(
 
 async fn get_recent_problems(
     State(state): State<AppState>,
-) -> Result<Json<enyay::Problem>, ApiError> {
-    Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?.expect("msg")))
+) -> Result<Json<Vec<enyay::Problem>>, ApiError> {
+    Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?))
 }
 
 async fn create_submission(
@@ -296,13 +296,17 @@ fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
 
 #[tokio::main]
 async fn main() -> Result<(), ApiError> {
-    let db_url = std::env::var("DATABASE_URL");
-    let bind_addr = std::env::var("BIND_ADDR").expect("msg");
+    load_env();
 
+    let db_url = std::env::var("DB_URL").unwrap();
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+
+    println!("connecting to database at {db_url}");
     let pool = MySqlPoolOptions::new()
         .max_connections(5)
-        .connect(&db_url.unwrap())
+        .connect(&db_url)
         .await?;
+    println!("connected to database");
 
     let app = Router::new()
         .route("/health", get(health))
@@ -326,8 +330,14 @@ async fn main() -> Result<(), ApiError> {
         .map_err(|error| ApiError::BadRequest(format!("invalid BIND_ADDR: {error}")))?;
     let listener = TcpListener::bind(addr).await?;
 
-    println!("listening on http://{addr}");
+    println!("server listening on http://{addr}");
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn load_env() {
+    if dotenvy::dotenv().is_err() {
+        dotenvy::from_filename("backend/.env").ok();
+    }
 }
