@@ -12,9 +12,8 @@ located at `localhost:8080`, login with user `root` and password.
 CREATE TABLE problems (
     problem_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     problem_name VARCHAR(255) NOT NULL,
-
-    runtime_ms BIGINT NOT NULL,
-    memory_kb BIGINT NOT NULL
+    runtime_ms BIGINT,
+    memory_kb BIGINT
 );
 ```
 
