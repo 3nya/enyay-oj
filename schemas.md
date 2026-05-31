@@ -10,7 +10,7 @@ located at `localhost:8080`, login with user `root` and password.
 ### problems
 ```sql
 CREATE TABLE problems (
-    problem_id BIGINT PRIMARY KEY,
+    problem_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
     memory_mb BIGINT
@@ -20,12 +20,12 @@ CREATE TABLE problems (
 ### submissions
 ```sql
 CREATE TABLE submissions (
-    submission_id BIGINT PRIMARY KEY,
-    
-    user_id BIGINT REFERENCES users(user_id),
-    problem_id BIGINT REFERENCES problems(problem_id),
-    
-    verdict VARCHAR(255),
+    submission_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id BIGINT NOT NULL,
+    problem_id BIGINT NOT NULL,
+
+    verdict VARCHAR(50) NOT NULL,
     runtime_ms BIGINT,
     memory_mb BIGINT,
     
