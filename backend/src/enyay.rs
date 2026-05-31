@@ -101,6 +101,12 @@ impl Language{
             Self::GCC14 => ["gcc:14", "g++"]
         }
     }
+
+    pub fn as_exten(&self) -> &'static str {
+        match self {
+            Self::GCC14 => ".cpp"
+        }
+    }
 }
 
 impl FromStr for Language{
