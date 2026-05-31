@@ -96,9 +96,9 @@ impl fmt::Display for LanguageNotSupportedError {
 impl std::error::Error for LanguageNotSupportedError{}
 
 impl Language{
-    pub fn as_str(&self) -> & 'static str{
+    pub fn as_str(&self) -> [&'static str;2]{
         match self{
-            Self::GCC14 => "gcc:14"
+            Self::GCC14 => ["gcc:14", "g++"]
         }
     }
 }
