@@ -44,23 +44,26 @@ pub async fn main(){
 }   
 
 
-async fn compile_with_docker(question:&Problem, file_name: &str, compiler: &str, judge_volume: &JudgeVolume) -> String {
+async fn compile_with_docker(question:&Problem, file_name: &str, compiler: [&str;2], judge_volume: &JudgeVolume) -> String {
     let compile = Command::new("docker")
         .args(["run","--rm"])
         .args(["-v",&judge_volume.volume_mount])
         .args(["-w","/app"])
-        .arg(compiler)
-        .args(["g++",file_name, "-o", "a.out"])
+        .arg(compiler[0])
+        .args([compiler[1],file_name, "-o", "a.out"])
         .status()
         .await
         .expect("Failed to compile code");
     if !compile.success() {panic!("Error compiling");}
 
-    let memory = format!("{}m",question.memory_mb.to_string());
-    run_with_docker(&memory, compiler,judge_volume).await
+    run_with_docker(question, compiler,judge_volume).await
 }
 
-async fn run_with_docker(memory_limit:&str, compiler:&str, judge_volume: &JudgeVolume) -> String{
+async fn run_with_docker(question:&Problem, compiler:[&str;2], judge_volume: &JudgeVolume) -> String{
+    let memory_limit = &format!("{}m",question.memory_mb.to_string());
+    let test_cases = "input.txt"; //replace this with a query from db using question
+    let redirect_test = format!("./a.out < {}",test_cases);
+
     let child = Command::new("docker")
         .args(["run", "-i", "--rm"])       
         .args(["--memory", memory_limit])       
@@ -68,8 +71,8 @@ async fn run_with_docker(memory_limit:&str, compiler:&str, judge_volume: &JudgeV
         .args(["--network", "none"])       
         .args(["-v", &judge_volume.volume_mount])
         .args(["-w", "/app"])
-        .arg(compiler)
-        .args(["sh", "-c", "./a.out < input.txt"])
+        .arg(compiler[0])
+        .args(["sh", "-c", &redirect_test])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
