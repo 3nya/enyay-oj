@@ -82,6 +82,38 @@ impl FromStr for Verdict {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language{
+    GCC14
+}
+#[derive(Debug)]
+pub struct LanguageNotSupportedError;
+impl fmt::Display for LanguageNotSupportedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Selected langauge is not supported")
+    }
+}
+impl std::error::Error for LanguageNotSupportedError{}
+
+impl Language{
+    pub fn as_str(&self) -> & 'static str{
+        match self{
+            Self::GCC14 => "gcc:14"
+        }
+    }
+}
+
+impl FromStr for Language{
+    type Err = LanguageNotSupportedError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s{
+            "c++20" => Ok(Self::GCC14),
+            _ => Err(LanguageNotSupportedError)
+        }
+    }
+}
+
 pub async fn get_users(pool: &MySqlPool) -> Result<Vec<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
