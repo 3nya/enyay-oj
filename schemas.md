@@ -16,6 +16,13 @@ CREATE TABLE problems (
     memory_mb BIGINT
 );
 ```
+### testcases
+CREATE TABLE testcases (
+    problem_id BIGINT NOT NULL,
+    input TEXT NOT NULL,
+    solution TEXT NOT NULL,
+    FOREIGN KEY (problem_id) REFERENCES problems(problem_id)
+);
 
 ### submissions
 ```sql
@@ -31,7 +38,7 @@ CREATE TABLE submissions (
     
     source_code VARCHAR(255),
     language VARCHAR(255),
-    
+
     submitted_time TIMESTAMP
 );
 ```

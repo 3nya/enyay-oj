@@ -16,6 +16,12 @@ pub struct Problem {
     pub runtime_ms: i64,
     pub memory_mb: i64,
 }
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct TestCase {
+    pub problem_id: i64,
+    pub input: String,
+    pub solution: String
+}
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Submission {
@@ -228,6 +234,44 @@ pub async fn get_recent_problems(
     .fetch_all(pool)
     .await
 }
+
+pub async fn insert_testcase(
+    pool: &MySqlPool,
+    problem_id: i64,
+    testcases: &str,
+    solution: &str
+) -> Result<i64,sqlx::Error> {
+        let result = sqlx::query(
+        r#"
+        INSERT INTO testcases (problem_id, input, solution)
+        VALUES (?, ?, ?)
+        "#,
+    )
+    .bind(problem_id)
+    .bind(testcases)
+    .bind(solution)
+    .execute(pool)
+    .await?;
+    Ok(last_insert_id(result))
+}
+
+pub async fn get_test_cases(
+    pool: &MySqlPool,
+    problem_id: i64
+) -> Result<Vec<TestCase>,sqlx::Error>{
+    sqlx::query_as::<_, TestCase>(
+        r#"
+        SELECT problem_id, input, solution
+        FROM testcases 
+        WHERE problem_id = ?
+        "#,
+    )
+    .bind(problem_id)
+    .fetch_all(pool)
+    .await
+}
+
+
 
 pub async fn insert_submission(
     pool: &MySqlPool,
