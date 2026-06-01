@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use tokio::{process::Command,io::AsyncWriteExt,fs};
-use std::{fmt::{self}, str::FromStr};
+use std::{fmt::{self}, io, str::FromStr};
 #[allow(unused_imports)]
 use std::{fmt::Error, io::Stdin, path::PathBuf, process::{ExitStatus, Output, Stdio}};
 use crate::{AppState, enyay::*};
@@ -47,7 +47,7 @@ pub async fn judge_submission(
     let language = fetch_language(submission).await?;
 
     let source_code_file = format!("{}_code_submission_{}{}",problem.problem_name,submission.submission_id,language.as_exten());
-    write_out_to_file(&submission.source_code, judge_volume, &source_code_file).await;
+    let _ = write_out_to_file(&submission.source_code, judge_volume, &source_code_file).await;
 
     let binary = compile_with_docker(&submission,&problem, &source_code_file, language.as_str(), judge_volume).await?;
     run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?;
@@ -68,10 +68,10 @@ async fn run_tests(
     let input_file = format!("{}_input.txt",problem.problem_name);
     let solution_file = format!("{}_solution.txt",problem.problem_name);
     for input in test_cases{
-        write_out_to_file(&input.input, judge_volume, &input_file).await;
-        write_out_to_file(&input.solution,judge_volume,&solution_file).await;
+        let _ = write_out_to_file(&input.input, judge_volume, &input_file).await;
+        let _ = write_out_to_file(&input.solution,judge_volume,&solution_file).await;
         let user_sol = run_with_docker(submission, problem, binary_file, &input_file, compiler, judge_volume).await?;
-        //check answewr
+        //Here is where we would check the answer
         let _ = delete_file(&input_file, judge_volume).await;
         let _ = delete_file(&solution_file, judge_volume).await;
         let _ = delete_file(&user_sol,judge_volume).await;
@@ -80,15 +80,10 @@ async fn run_tests(
     Ok(())
 }
 
-async fn delete_file(file_name:&str, judge_volume: &JudgeVolume) -> ExitStatus{
-    let rm = Command::new("rm")
-        .current_dir(&judge_volume.input_dir)
-        .arg(file_name)
-        .status()
-        .await
-        .expect("Failed to delete file");
-    println!("{rm}");
-    rm
+async fn delete_file(file_name:&str, judge_volume: &JudgeVolume) -> io::Result<()>{
+    let path = &judge_volume.input_dir.join(file_name);
+    fs::remove_file(path).await?;
+    Ok(())
 }
 
 async fn fetch_question(submission:&Submission, app_state: &AppState) -> Result<Problem,sqlx::Error>{
@@ -161,17 +156,16 @@ async fn run_with_docker(
 
     let out_str = String::from_utf8_lossy(&output.stdout);
     let output_file = format!("{}_response_{}.txt",question.problem_name,submission.submission_id);
-    write_out_to_file(&out_str, judge_volume,&output_file).await;
+    let _ = write_out_to_file(&out_str, judge_volume,&output_file).await;
     Ok(output_file)
 }
 
-async fn write_out_to_file(output: &str, judge_volume: &JudgeVolume, file_name: &str) -> String{
+async fn write_out_to_file(output: &str, judge_volume: &JudgeVolume, file_name: &str) -> io::Result<String>{
     let output = output.trim();
     let path =&judge_volume.input_dir;
     let write_path = path.join(file_name);
     fs::write(write_path,output)
-        .await
-        .expect("Failed to write to disk");
-    file_name.to_string()
+        .await?;
+    Ok(file_name.to_string())
 }
 
