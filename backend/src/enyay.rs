@@ -179,17 +179,17 @@ pub async fn insert_problem(
     pool: &MySqlPool,
     problem_name: &str,
     runtime_ms: i64,
-    memory_kb: i64,
+    memory_mb: i64,
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO problems (problem_name, runtime_ms, memory_kb)
+        INSERT INTO problems (problem_name, runtime_ms, memory_mb)
         VALUES (?, ?, ?)
         "#,
     )
     .bind(problem_name)
     .bind(runtime_ms)
-    .bind(memory_kb)
+    .bind(memory_mb)
     .execute(pool)
     .await?;
 
@@ -202,7 +202,7 @@ pub async fn get_problem(
 ) -> Result<Option<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_kb
+        SELECT problem_id, problem_name, runtime_ms, memory_mb
         FROM problems
         WHERE problem_id = ?
         "#,
@@ -218,7 +218,7 @@ pub async fn get_recent_problems(
 ) -> Result<Vec<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_kb
+        SELECT problem_id, problem_name, runtime_ms, memory_mb
         FROM problems
         ORDER BY problem_id ASC
         LIMIT ?
@@ -235,14 +235,14 @@ pub async fn insert_submission(
     problem_id: i64,
     verdict: Verdict,
     runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
+    memory_mb: Option<i64>,
     language: Option<&str>,
     source_code: &str,
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
         INSERT INTO submissions
-            (user_id, problem_id, verdict, runtime_ms, memory_kb, language, source_code)
+            (user_id, problem_id, verdict, runtime_ms, memory_mb, language, source_code)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
     )
@@ -250,7 +250,7 @@ pub async fn insert_submission(
     .bind(problem_id)
     .bind(verdict.as_str())
     .bind(runtime_ms)
-    .bind(memory_kb)
+    .bind(memory_mb)
     .bind(language)
     .bind(source_code)
     .execute(pool)
@@ -271,7 +271,7 @@ pub async fn get_submission(
             problem_id,
             verdict,
             runtime_ms,
-            memory_kb,
+            memory_mb,
             language,
             source_code
         FROM submissions
@@ -295,7 +295,7 @@ pub async fn get_recent_submissions(
             problem_id,
             verdict,
             runtime_ms,
-            memory_kb,
+            memory_mb,
             language,
             source_code
         FROM submissions
@@ -315,7 +315,7 @@ pub async fn insert_submission_with_id(
     problem_id: i64,
     verdict: Verdict,
     runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
+    memory_mb: Option<i64>,
     language: Option<&str>,
     source_code: &str,
 ) -> Result<u64, sqlx::Error> {
@@ -328,7 +328,7 @@ pub async fn insert_submission_with_id(
                 problem_id,
                 verdict,
                 runtime_ms,
-                memory_kb,
+                memory_mb,
                 language,
                 source_code
             )
@@ -340,7 +340,7 @@ pub async fn insert_submission_with_id(
     .bind(problem_id)
     .bind(verdict.as_str())
     .bind(runtime_ms)
-    .bind(memory_kb)
+    .bind(memory_mb)
     .bind(language)
     .bind(source_code)
     .execute(pool)
@@ -354,18 +354,18 @@ pub async fn update_submission_verdict(
     submission_id: i64,
     verdict: Verdict,
     runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
+    memory_mb: Option<i64>,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         r#"
         UPDATE submissions
-        SET verdict = ?, runtime_ms = ?, memory_kb = ?
+        SET verdict = ?, runtime_ms = ?, memory_mb = ?
         WHERE submission_id = ?
         "#,
     )
     .bind(verdict.as_str())
     .bind(runtime_ms)
-    .bind(memory_kb)
+    .bind(memory_mb)
     .bind(submission_id)
     .execute(pool)
     .await?;

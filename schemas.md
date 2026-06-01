@@ -30,6 +30,7 @@ CREATE TABLE submissions (
     memory_mb BIGINT,
     
     source_code VARCHAR(255),
+    language VARCHAR(255),
     
     submitted_time TIMESTAMP
 );

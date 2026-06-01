@@ -5,7 +5,7 @@ use std::{str::FromStr};
 use std::{fmt::Error, io::Stdin, path::PathBuf, process::{ExitStatus, Output, Stdio}};
 use crate::{AppState, enyay::*};
 
-struct JudgeVolume{
+pub struct JudgeVolume{
     volume_mount: String,
     input_dir: PathBuf
 }
@@ -17,7 +17,7 @@ impl JudgeVolume{
 
         can be replaced with an absolute path
      */
-    fn new() -> Self{
+    pub fn new() -> Self{
         let mut input_dir = std::env::current_dir().expect("Failed to retrieve current dir");
         input_dir = input_dir.join("user_input");
         Self { 
@@ -27,41 +27,21 @@ impl JudgeVolume{
     }
 }
 
-pub async fn judge_main(/*app_state: &AppState*/){
+pub async fn judge_main() -> JudgeVolume{
     let judge_volumes = JudgeVolume::new();
-    let _ = judge_submission(&judge_volumes).await;
-    
-   /* let test_question = Problem{
-        problem_id: 1,
-        problem_name: String::from("Add 2"),
-        runtime_ms: 1,
-        memory_mb: 128
-    };
-
-    let language = "c++20";
-    let compiler = Language::from_str(language).expect("it should have worked bud");
-    let compiler = compiler.as_str();
-    let _output = compile_with_docker(&test_question, "AddTwo.cpp", compiler, &judge_volumes).await;*/
+    judge_volumes
 }   
 
-async fn judge_submission(/*submission:&Submission,*/ judge_volume: &JudgeVolume, /*(app_state: &AppState*/) -> Result<(),Box<dyn std::error::Error>> {
-    //let problem = fetch_question(submission, app_state).await?;
-    let problem = Problem{
-        problem_id: 1,
-        problem_name: String::from("Add 2"),
-        runtime_ms: 1,
-        memory_mb: 128
-    };
-    //let language = fetch_language(submission).await?;
-    let language = Language::from_str("c++20")?;
-    
-    /* stored text > file > compile & run file
+pub async fn judge_submission(submission:&Submission, judge_volume: &JudgeVolume, app_state: &AppState) -> Result<(),Box<dyn std::error::Error>> {
+    let problem = fetch_question(submission, app_state).await?;
 
-    let source_code_file = format!("user_code_submission_{}{}",submission.submission_id,language.as_exten());
+    let language = fetch_language(submission).await?;
+
+    let source_code_file = format!("{}_code_submission_{}{}",problem.problem_name,submission.submission_id,language.as_exten());
     write_out_to_file(&submission.source_code, judge_volume, &source_code_file).await;
-    */
-    let source_code_file = format!("AddTwo{}",language.as_exten());
-    compile_with_docker(&problem, &source_code_file, language.as_str(), judge_volume).await;
+
+
+    compile_with_docker(&submission,&problem, &source_code_file, language.as_str(), judge_volume).await;
     Ok(())
 }
 
@@ -84,27 +64,27 @@ async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotS
     Language::from_str(language)
 }
 
+async fn compile_with_docker(submission:&Submission, question:&Problem, file_name: &str, compiler: [&str;2], judge_volume: &JudgeVolume) -> String {
+    let compiled_file = format!("{}_{}.out",question.problem_name,submission.submission_id);
 
-
-async fn compile_with_docker(question:&Problem, file_name: &str, compiler: [&str;2], judge_volume: &JudgeVolume) -> String {
     let compile = Command::new("docker")
         .args(["run","--rm"])
         .args(["-v",&judge_volume.volume_mount])
         .args(["-w","/app"])
         .arg(compiler[0])
-        .args([compiler[1],file_name, "-o", "a.out"])
+        .args([compiler[1],file_name, "-o", &compiled_file])
         .status()
         .await
         .expect("Failed to compile code");
     if !compile.success() {panic!("Error compiling");}
 
-    run_with_docker(question, compiler,judge_volume).await
+    run_with_docker(submission, question, &compiled_file,compiler,judge_volume).await
 }
 
-async fn run_with_docker(question:&Problem, compiler:[&str;2], judge_volume: &JudgeVolume) -> String{
+async fn run_with_docker(submission:&Submission, question:&Problem, compiled_file:&str, compiler:[&str;2], judge_volume: &JudgeVolume) -> String{
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
     let test_cases = "input.txt"; //replace this with a query from db using question_id
-    let redirect_test = format!("./a.out < {}",test_cases);
+    let redirect_test = format!("./{} < {}",compiled_file,test_cases);
 
     let child = Command::new("docker")
         .args(["run", "-i", "--rm"])       
@@ -122,7 +102,8 @@ async fn run_with_docker(question:&Problem, compiler:[&str;2], judge_volume: &Ju
     let output = child.wait_with_output().await.expect("Fail to read output");
 
     let out_str = String::from_utf8_lossy(&output.stdout);
-    write_out_to_file(&out_str, judge_volume,"user_output.txt").await;
+    let output_file = format!("{}_{}.txt",question.problem_name,submission.submission_id);
+    write_out_to_file(&out_str, judge_volume,&output_file).await;
     out_str.into_owned()
 }
 
