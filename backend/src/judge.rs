@@ -6,8 +6,11 @@ use std::{fmt::Error, io::Stdin, path::PathBuf, process::{ExitStatus, Output, St
 use crate::{AppState, enyay::*};
 
 pub struct JudgeVolume{
-    volume_mount: String,
-    input_dir: PathBuf
+    input_volume_mount: String,
+    user_volume_mount: String,
+    input_dir: PathBuf,
+    output_dir:PathBuf
+    
 }
  
 impl JudgeVolume{
@@ -18,13 +21,16 @@ impl JudgeVolume{
         can be replaced with an absolute path
      */
     pub fn new() -> io::Result<Self>{
-        let mut input_dir = std::env::current_dir().expect("Failed to retrieve current dir");
-        input_dir = input_dir.join("user_input");
+        let whole_dir = std::env::current_dir().expect("Failed to retrieve current dir");
+        let output_dir = whole_dir.join("user_inputs");
+        let input_dir = whole_dir.join("test_cases");
         std::fs::create_dir_all(&input_dir)?;
 
         Ok(Self { 
             input_dir: input_dir.to_owned(),
-            volume_mount: format!("{}:/app",input_dir.display())
+            output_dir: output_dir.to_owned(),
+            input_volume_mount: format!("{}:/app/inputs:ro",input_dir.display()),
+            user_volume_mount: format!("{}:/app/workspace:rw",output_dir.display())
         })
     }
 }
@@ -49,11 +55,11 @@ pub async fn judge_submission(
     let language = fetch_language(submission).await?;
 
     let source_code_file = format!("{}_code_submission_{}{}",problem.problem_name,submission.submission_id,language.as_exten());
-    let _ = write_out_to_file(&submission.source_code, judge_volume, &source_code_file).await;
+    let _ = write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await;
 
     let binary = compile_with_docker(&submission,&problem, &source_code_file, language.as_str(), judge_volume).await?;
     run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?;
-    let _ = delete_file(&source_code_file, judge_volume).await;
+    let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
     Ok(())
 }
 
@@ -70,20 +76,20 @@ async fn run_tests(
     let input_file = format!("{}_input.txt",problem.problem_name);
     let solution_file = format!("{}_solution.txt",problem.problem_name);
     for input in test_cases{
-        let _ = write_out_to_file(&input.input, judge_volume, &input_file).await;
-        let _ = write_out_to_file(&input.solution,judge_volume,&solution_file).await;
+        let _ = write_out_to_file(&input.input, &judge_volume.input_dir, &input_file).await;
+        let _ = write_out_to_file(&input.solution,&judge_volume.input_dir,&solution_file).await;
         let user_sol = run_with_docker(submission, problem, binary_file, &input_file, compiler, judge_volume).await?;
         //Here is where we would check the answer
-        let _ = delete_file(&input_file, judge_volume).await;
-        let _ = delete_file(&solution_file, judge_volume).await;
-        let _ = delete_file(&user_sol,judge_volume).await;
+        let _ = delete_file(&input_file, &judge_volume.input_dir).await;
+        let _ = delete_file(&solution_file, &judge_volume.input_dir).await;
+        let _ = delete_file(&user_sol,&judge_volume.output_dir).await;
     }
-    let _ = delete_file(binary_file, judge_volume).await;
+    let _ = delete_file(binary_file, &judge_volume.output_dir).await;
     Ok(())
 }
 
-async fn delete_file(file_name:&str, judge_volume: &JudgeVolume) -> io::Result<()>{
-    let path = &judge_volume.input_dir.join(file_name);
+async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
+    let path = &path.join(file_name);
     fs::remove_file(path).await?;
     Ok(())
 }
@@ -118,8 +124,9 @@ async fn compile_with_docker(
 
     let compile = Command::new("docker")
         .args(["run","--rm"])
-        .args(["-v",&judge_volume.volume_mount])
-        .args(["-w","/app"])
+        .args(["-v",&judge_volume.user_volume_mount])
+        .args(["--user", "1000:1000"])
+        .args(["-w","/app/workspace"])
         .arg(compiler[0])
         .args([compiler[1],file_name, "-o", &compiled_file])
         .status()
@@ -139,15 +146,17 @@ async fn run_with_docker(
     judge_volume: &JudgeVolume
 ) -> Result<String,DockerError> {
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
-    let redirect_test = format!(r#"./"{}" < "{}""#,compiled_file,test_cases);
+    let redirect_test = format!(r#"./"{}" < "/app/inputs/{}""#,compiled_file,test_cases);
 
     let child = Command::new("docker")
         .args(["run", "-i", "--rm"])       
         .args(["--memory", memory_limit])       
         .args(["--cpus", "1.0"])           
         .args(["--network", "none"])       
-        .args(["-v", &judge_volume.volume_mount])
-        .args(["-w", "/app"])
+        .args(["-v", &judge_volume.input_volume_mount])
+        .args(["-v",&judge_volume.user_volume_mount])
+        .args(["--user", "1000:1000"])
+        .args(["-w", "/app/workspace"])
         .arg(compiler[0])
         .args(["sh", "-c", &redirect_test])
         .stdout(Stdio::piped())
@@ -158,13 +167,13 @@ async fn run_with_docker(
 
     let out_str = String::from_utf8_lossy(&output.stdout);
     let output_file = format!("{}_response_{}.txt",question.problem_name,submission.submission_id);
-    let _ = write_out_to_file(&out_str, judge_volume,&output_file).await;
+    let _ = write_out_to_file(&out_str, &judge_volume.output_dir,&output_file).await;
     Ok(output_file)
 }
 
-async fn write_out_to_file(output: &str, judge_volume: &JudgeVolume, file_name: &str) -> io::Result<String>{
+async fn write_out_to_file(output: &str, dir: &PathBuf, file_name: &str) -> io::Result<String>{
     let output = output.trim();
-    let path =&judge_volume.input_dir;
+    let path =&dir;
     let write_path = path.join(file_name);
     fs::write(write_path,output)
         .await?;
