@@ -17,13 +17,15 @@ impl JudgeVolume{
 
         can be replaced with an absolute path
      */
-    pub fn new() -> Self{
+    pub fn new() -> io::Result<Self>{
         let mut input_dir = std::env::current_dir().expect("Failed to retrieve current dir");
         input_dir = input_dir.join("user_input");
-        Self { 
+        std::fs::create_dir_all(&input_dir)?;
+
+        Ok(Self { 
             input_dir: input_dir.to_owned(),
             volume_mount: format!("{}:/app",input_dir.display())
-        }
+        })
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

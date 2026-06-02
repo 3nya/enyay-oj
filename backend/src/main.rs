@@ -27,6 +27,7 @@ enum ApiError {
     NotFound(String),
     Database(sqlx::Error),
     Io(std::io::Error),
+    Judge(String),
 }
 
 impl IntoResponse for ApiError {
@@ -46,6 +47,13 @@ impl IntoResponse for ApiError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server request failed".to_string(),
+                )
+            }
+            Self::Judge(error) => {
+                eprintln!("judge error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("judge failed: {error}"),
                 )
             }
         };
@@ -265,6 +273,22 @@ async fn get_recent_submissions(
     Ok(Json(enyay::get_recent_submissions(&state.pool, 20).await?))
 }
 
+async fn judge_submission(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let submission = enyay::get_submission(&state.pool, submission_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
+
+    let judge_volume = judge::JudgeVolume::new()?;
+    judge::judge_submission(&submission, &judge_volume, &state)
+        .await
+        .map_err(|error| ApiError::Judge(error.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn update_submission_verdict(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
@@ -320,6 +344,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
+        .route("/submissions/{submission_id}/judge", post(judge_submission))
         .route(
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
