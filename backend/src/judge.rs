@@ -35,7 +35,7 @@ impl JudgeVolume{
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DockerError;
+pub struct DockerError{}
 
 impl fmt::Display for DockerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -44,6 +44,11 @@ impl fmt::Display for DockerError {
 }
 
 impl std::error::Error for DockerError {}
+impl From<std::io::Error> for DockerError {
+    fn from(_: std::io::Error) -> Self {
+        DockerError{}
+    }
+}
 
 pub async fn judge_submission(
     submission:&Submission, 
@@ -98,7 +103,11 @@ async fn run_tests(
                 }
                 if !correct{break;}
             },
-            Ok(Err(DockerError)) => return Ok(Verdict::Pending),
+            Ok(Err(_)) => {
+                //docker error. Could also just say wrong here
+                cleanup(&input_file, binary_file, judge_volume).await?;
+                return Ok(Verdict::Pending);
+            } 
             Err(_) => {
                 let _ = Command::new("docker")
                 .args(["kill",binary_file])
@@ -158,8 +167,7 @@ async fn compile_with_docker(
         .arg(compiler[0])
         .args([compiler[1],file_name, "-o", &compiled_file])
         .status()
-        .await
-        .expect("Failed to compile code");
+        .await?;
     Ok(compile)
 }
 
@@ -187,9 +195,8 @@ async fn run_with_docker(
         .args(["sh", "-c", &redirect_test])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to run code");
-    let output = child.wait_with_output().await.expect("Fail to read output");
+        .spawn()?;
+    let output = child.wait_with_output().await?;
     Ok(output)
 }
 
