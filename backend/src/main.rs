@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::Verdict;
+use crate::enyay::{Language, Verdict, insert_submission};
 
 #[derive(Clone)]
 struct AppState {
@@ -320,7 +320,41 @@ fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
 // Main function
 
 #[tokio::main]
-async fn main() -> Result<(), ApiError> {
+async fn main() -> Result<(),ApiError>{
+    load_env();
+    let db_url = std::env::var("DB_URL").unwrap();
+
+    let pool = MySqlPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await?;
+    println!("connected to database");
+    let _ = insert_submission(&pool, 1, 1, Verdict::Pending, None, None, Some("c++20"), 
+    r#"
+    #include <iostream>
+    #include <vector>
+    int main(){
+        std::vector<int> n (5,0);
+        std::cout >> n[1000];
+        return 0;
+    }
+    "#).await;
+
+    let judge_volume = judge::JudgeVolume::new().unwrap();
+
+    let app_state = AppState {pool};
+
+    let test_subs: Json<Vec<enyay::Submission>> = get_recent_submissions(State(app_state.clone())).await.expect("Failed to retrieve submission");
+    let most_recent = &test_subs.0[0];
+
+    let result = judge::judge_submission(most_recent,&judge_volume,&app_state).await;
+    match result {
+        Ok(res) => println!("{}",res),
+        Err(_) => println!("Could not complete request")
+    }
+    Ok(())
+}
+/*async fn main() -> Result<(), ApiError> {
     load_env();
 
     let db_url = std::env::var("DB_URL").unwrap();
@@ -360,7 +394,7 @@ async fn main() -> Result<(), ApiError> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
+}*/
 
 fn load_env() {
     if dotenvy::dotenv().is_err() {

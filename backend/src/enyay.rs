@@ -42,6 +42,8 @@ pub enum Verdict {
     WrongAnswer,
     TimeLimitExceeded,
     MemoryLimitExceeded,
+    RunTimeError,
+    CompileError
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +65,8 @@ impl Verdict {
             Self::WrongAnswer => "WA",
             Self::TimeLimitExceeded => "TLE",
             Self::MemoryLimitExceeded => "MLE",
+            Self::RunTimeError => "RE",
+            Self::CompileError => "CE"
         }
     }
 }
@@ -83,6 +87,8 @@ impl FromStr for Verdict {
             "WA" => Ok(Self::WrongAnswer),
             "TLE" => Ok(Self::TimeLimitExceeded),
             "MLE" => Ok(Self::MemoryLimitExceeded),
+            "RE" => Ok(Self::RunTimeError),
+            "CE" => Ok(Self::CompileError),
             _ => Err(ParseVerdictError),
         }
     }
