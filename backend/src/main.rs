@@ -6,15 +6,15 @@ use std::{net::SocketAddr, str::FromStr};
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
+    http::{StatusCode, header},
+    response::{Html, IntoResponse, Response},
     routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::{Language, Verdict, insert_submission};
+use crate::enyay::Verdict;
 
 #[derive(Clone)]
 struct AppState {
@@ -122,6 +122,45 @@ struct UpdateVerdictRequest {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn frontend_index() -> Html<&'static str> {
+    Html(include_str!("../../frontend/index.html"))
+}
+
+async fn frontend_styles() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../../frontend/styles.css"),
+    )
+}
+
+async fn frontend_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../../frontend/app.js"),
+    )
+}
+
+async fn frontend_logo() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../frontend/assets/enyayoj-logo.png").as_slice(),
+    )
+}
+
+async fn frontend_mascot() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../frontend/assets/enyayoj-mascot.png").as_slice(),
+    )
+}
+
+async fn frontend_favicon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/x-icon")],
+        include_bytes!("../../frontend/assets/favicon.ico").as_slice(),
+    )
 }
 
 async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<enyay::User>>, ApiError> {
@@ -317,44 +356,8 @@ fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
     Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
 }
 
-// Main function
-
 #[tokio::main]
-async fn main() -> Result<(),ApiError>{
-    load_env();
-    let db_url = std::env::var("DB_URL").unwrap();
-
-    let pool = MySqlPoolOptions::new()
-        .max_connections(5)
-        .connect(&db_url)
-        .await?;
-    println!("connected to database");
-    let _ = insert_submission(&pool, 1, 1, Verdict::Pending, None, None, Some("c++20"), 
-    r#"
-    #include <iostream>
-    #include <vector>
-    int main(){
-        std::vector<int> n (5,0);
-        std::cout >> n[1000];
-        return 0;
-    }
-    "#).await;
-
-    let judge_volume = judge::JudgeVolume::new().unwrap();
-
-    let app_state = AppState {pool};
-
-    let test_subs: Json<Vec<enyay::Submission>> = get_recent_submissions(State(app_state.clone())).await.expect("Failed to retrieve submission");
-    let most_recent = &test_subs.0[0];
-
-    let result = judge::judge_submission(most_recent,&judge_volume,&app_state).await;
-    match result {
-        Ok(res) => println!("{}",res),
-        Err(_) => println!("Could not complete request")
-    }
-    Ok(())
-}
-/*async fn main() -> Result<(), ApiError> {
+async fn main() -> Result<(), ApiError> {
     load_env();
 
     let db_url = std::env::var("DB_URL").unwrap();
@@ -368,6 +371,17 @@ async fn main() -> Result<(),ApiError>{
     println!("connected to database");
 
     let app = Router::new()
+        .route("/", get(frontend_index))
+        .route("/problemset", get(frontend_index))
+        .route("/submit", get(frontend_index))
+        .route("/submit/{problem_id}", get(frontend_index))
+        .route("/users-page", get(frontend_index))
+        .route("/about", get(frontend_index))
+        .route("/styles.css", get(frontend_styles))
+        .route("/app.js", get(frontend_script))
+        .route("/assets/enyayoj-logo.png", get(frontend_logo))
+        .route("/assets/enyayoj-mascot.png", get(frontend_mascot))
+        .route("/assets/favicon.ico", get(frontend_favicon))
         .route("/health", get(health))
         .route("/users", get(get_users).post(create_user))
         .route("/users/by-name/{user_name}", get(get_user_by_name))
@@ -394,7 +408,7 @@ async fn main() -> Result<(),ApiError>{
     axum::serve(listener, app).await?;
 
     Ok(())
-}*/
+}
 
 fn load_env() {
     if dotenvy::dotenv().is_err() {
