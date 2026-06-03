@@ -65,8 +65,12 @@ pub async fn judge_submission(
     let binary = format!("{}_{}.out",problem.problem_name,submission.submission_id);
     let compile_status = compile_with_docker(&binary, &source_code_file, language.as_str(), judge_volume).await?;
     let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
-    if !compile_status.success() {return Ok(Verdict::CompileError)}
-    Ok(run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?)
+
+    let submission_verdict: Verdict;
+    if !compile_status.success() {submission_verdict = Verdict::CompileError}
+    else {submission_verdict = run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?}
+    update_submission_verdict(&app_state.pool, submission.submission_id, submission_verdict, Some(0), Some(0)).await?;
+    Ok(submission_verdict)
 }
 
 async fn run_tests(
