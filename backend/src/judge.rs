@@ -1,8 +1,6 @@
-#[allow(unused_imports)]
-use tokio::{process::Command,io::AsyncWriteExt,fs,time::{timeout,Duration}};
+use tokio::{process::Command,fs,time::{timeout,Duration}};
 use std::{fmt::{self}, io, str::FromStr};
-#[allow(unused_imports)]
-use std::{fmt::Error, io::Stdin, path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
+use std::{path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
 use chrono::{DateTime, Utc};
 use crate::{AppState, enyay::*};
 
@@ -35,6 +33,7 @@ impl JudgeVolume{
         })
     }
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DockerError{}
 
@@ -55,11 +54,13 @@ impl From<chrono::ParseError> for DockerError{
         DockerError {}
     }
 }
+
 #[derive(Debug)]
 pub struct Metric{
     runtime_ms: Option<i64>,
     peak_memory_kb: Option<i64>,
 }
+
 pub struct SubmissionResults{
     pub verdict: Verdict,
     pub metrics: Metric,
@@ -143,46 +144,6 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
     }
 }
 
-async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
-    if new_metric.runtime_ms.is_some() {
-        old_metric.runtime_ms = max(old_metric.runtime_ms, new_metric.runtime_ms);
-    }
-    
-    if new_metric.peak_memory_kb.is_some() {
-        old_metric.peak_memory_kb = max(old_metric.peak_memory_kb, new_metric.peak_memory_kb);
-    }
-}
-
-async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
-    let path = &path.join(file_name);
-    fs::remove_file(path).await?;
-    Ok(())
-}
-async fn cleanup(input_file:&str, binary_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
-    let _ = delete_file(input_file, &judge_volume.input_dir).await?;
-    let _ = delete_file(binary_file, &judge_volume.output_dir).await?;
-    Ok(())
-}
-
-async fn fetch_question(submission:&Submission, app_state: &AppState) -> Result<Problem,sqlx::Error>{
-    let submission_question = get_problem(&app_state.pool, submission.problem_id).await?;
-    let problem;
-    match submission_question{
-        Some(question) => problem = question,
-        None => return Err(sqlx::Error::RowNotFound)
-    }
-    Ok(problem)
-}
-
-async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotSupportedError>{
-    let language;
-    match &submission.language{
-        Some(lang) => language = lang,
-        None => return Err(LanguageNotSupportedError)
-    }
-    Language::from_str(language)
-}
-
 async fn compile_with_docker(
     compiled_file:&str,
     file_name: &str, 
@@ -232,15 +193,6 @@ async fn run_with_docker(
     Ok(output)
 }
 
-async fn write_out_to_file(output: &str, dir: &PathBuf, file_name: &str) -> io::Result<String>{
-    let output = output.trim();
-    let path =&dir;
-    let write_path = path.join(file_name);
-    fs::write(write_path,output)
-        .await?;
-    Ok(file_name.to_string())
-}
-
 async fn docker_metrics(
     output: &Output,
     docker_name: &str
@@ -274,10 +226,59 @@ async fn docker_metrics(
     Ok(Metric { runtime_ms: Some(duration_ms), peak_memory_kb: Some(peak_memory_kb) })
 }
 
+async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
+    if new_metric.runtime_ms.is_some() {
+        old_metric.runtime_ms = max(old_metric.runtime_ms, new_metric.runtime_ms);
+    }
+    
+    if new_metric.peak_memory_kb.is_some() {
+        old_metric.peak_memory_kb = max(old_metric.peak_memory_kb, new_metric.peak_memory_kb);
+    }
+}
+
 async fn kill_container(docker_name:&str) -> std::io::Result<()>{
     let _ = Command::new("docker")
-        .args(["rm", docker_name])                                                              
+        .args(["rm", "-v",docker_name])                                                              
         .output()
         .await?;
     Ok(())
+}
+
+async fn write_out_to_file(output: &str, dir: &PathBuf, file_name: &str) -> io::Result<String>{
+    let output = output.trim();
+    let path =&dir;
+    let write_path = path.join(file_name);
+    fs::write(write_path,output)
+        .await?;
+    Ok(file_name.to_string())
+}
+
+async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
+    let path = &path.join(file_name);
+    fs::remove_file(path).await?;
+    Ok(())
+}
+async fn cleanup(input_file:&str, binary_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
+    let _ = delete_file(input_file, &judge_volume.input_dir).await?;
+    let _ = delete_file(binary_file, &judge_volume.output_dir).await?;
+    Ok(())
+}
+
+async fn fetch_question(submission:&Submission, app_state: &AppState) -> Result<Problem,sqlx::Error>{
+    let submission_question = get_problem(&app_state.pool, submission.problem_id).await?;
+    let problem;
+    match submission_question{
+        Some(question) => problem = question,
+        None => return Err(sqlx::Error::RowNotFound)
+    }
+    Ok(problem)
+}
+
+async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotSupportedError>{
+    let language;
+    match &submission.language{
+        Some(lang) => language = lang,
+        None => return Err(LanguageNotSupportedError)
+    }
+    Language::from_str(language)
 }
