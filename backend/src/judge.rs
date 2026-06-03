@@ -2,7 +2,8 @@
 use tokio::{process::Command,io::AsyncWriteExt,fs,time::{timeout,Duration}};
 use std::{fmt::{self}, io, str::FromStr};
 #[allow(unused_imports)]
-use std::{fmt::Error, io::Stdin, path::PathBuf, process::{ExitStatus, Output, Stdio}};
+use std::{fmt::Error, io::Stdin, path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
+use chrono::{DateTime, Utc};
 use crate::{AppState, enyay::*};
 
 pub struct JudgeVolume{
@@ -49,12 +50,26 @@ impl From<std::io::Error> for DockerError {
         DockerError{}
     }
 }
+impl From<chrono::ParseError> for DockerError{
+    fn from(_:chrono::ParseError) -> Self{
+        DockerError {}
+    }
+}
+#[derive(Debug)]
+pub struct Metric{
+    runtime_ms: Option<i64>,
+    peak_memory_kb: Option<i64>,
+}
+pub struct SubmissionResults{
+    pub verdict: Verdict,
+    pub metrics: Metric,
+}
 
 pub async fn judge_submission(
     submission:&Submission, 
     judge_volume: &JudgeVolume, 
     app_state: &AppState
-) -> Result<Verdict,Box<dyn std::error::Error>> {
+) -> Result<SubmissionResults,Box<dyn std::error::Error>> {
     let problem = fetch_question(submission, app_state).await?;
 
     let language = fetch_language(submission).await?;
@@ -66,11 +81,11 @@ pub async fn judge_submission(
     let compile_status = compile_with_docker(&binary, &source_code_file, language.as_str(), judge_volume).await?;
     let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
 
-    let submission_verdict: Verdict;
-    if !compile_status.success() {submission_verdict = Verdict::CompileError}
-    else {submission_verdict = run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?}
-    update_submission_verdict(&app_state.pool, submission.submission_id, submission_verdict, Some(0), Some(0)).await?;
-    Ok(submission_verdict)
+    let submission_results: SubmissionResults;
+    if !compile_status.success() {submission_results = SubmissionResults { verdict: Verdict::CompileError, metrics: Metric { runtime_ms: None, peak_memory_kb: None } }}
+    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?}
+    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
+    Ok(submission_results)
 }
 
 async fn run_tests(
@@ -80,51 +95,62 @@ async fn run_tests(
     app_state: &AppState,
     binary_file: &str,
     compiler: [&str;2]
-)-> Result<Verdict,Box<dyn std::error::Error>> {
+)-> Result<SubmissionResults,Box<dyn std::error::Error>> {
     let test_cases = get_test_cases(&app_state.pool, problem.problem_id).await?;
 
     let input_file = format!("{}_input.txt",problem.problem_name);
-    let mut correct = true;
+    let mut verdict = Verdict::Accepted;
+    let mut metrics = Metric{runtime_ms: None, peak_memory_kb: None};
     for (i,input) in test_cases.iter().enumerate(){
-        let container_name = format!("sub_{}_test_{}", submission.submission_id, i);
+        let container_name = format!("sub_{}_test_{}_problem_{}", submission.submission_id, i,problem.problem_id);
         let _ = write_out_to_file(&input.input, &judge_volume.input_dir, &input_file).await;
         let user_sol = timeout(
             Duration::from_millis(problem.runtime_ms as u64),
     run_with_docker(problem, binary_file, &input_file, compiler, &container_name,judge_volume)
         ).await;
-        match user_sol {
-            Ok(Ok(output)) => {
-                match output.status.code() {
-                    Some(0) => correct = String::from_utf8_lossy(&output.stdout).into_owned().trim() == input.solution.trim(),
-                    Some(137) => {
-                        cleanup(&input_file, binary_file, judge_volume).await?;
-                        return Ok(Verdict::MemoryLimitExceeded);
-                    }
-                    _ => {
-                        cleanup(&input_file, binary_file, judge_volume).await?;
-                        return Ok(Verdict::RunTimeError);
-                    }
-                }
-                if !correct{break;}
-            },
-            Ok(Err(_)) => {
-                //docker error. Could also just say wrong here
-                cleanup(&input_file, binary_file, judge_volume).await?;
-                return Ok(Verdict::Pending);
-            } 
-            Err(_) => {
-                let _ = Command::new("docker")
-                .args(["kill",binary_file])
-                .output()
-                .await;
-                cleanup(&input_file, binary_file, judge_volume).await?;
-                return Ok(Verdict::TimeLimitExceeded)
-            }
+        let submission_results = check_sol(user_sol, input,&container_name,problem).await?;
+        verdict = submission_results.verdict;
+        update_metric(& mut metrics, &submission_results.metrics).await;
+        if verdict != Verdict::Accepted {
+            break;
         }
+        kill_container(&container_name).await?;
     }
     cleanup(&input_file, binary_file, judge_volume).await?;
-    if correct {Ok(Verdict::Accepted)}
-    else {Ok(Verdict::WrongAnswer)}
+    //when crashes occur due to MLE or TLE, metrics is not calculated properly
+    if verdict == Verdict::MemoryLimitExceeded { metrics.peak_memory_kb = Some(problem.memory_mb*1024); }
+    Ok(SubmissionResults { verdict, metrics})
+
+}
+
+async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&TestCase, container_name: &str, problem : &Problem) -> Result<SubmissionResults,DockerError>{
+    match user_sol {
+        Ok(Ok(output)) => {
+            let metrics = docker_metrics(&output, container_name).await?;
+            match output.status.code() {
+                Some(0) => {
+                    if String::from_utf8_lossy(&output.stdout).into_owned().trim() == input.solution.trim() {
+                        return Ok(SubmissionResults { verdict:Verdict::Accepted, metrics });
+                    }
+                    Ok(SubmissionResults { verdict:Verdict::WrongAnswer, metrics })
+                },
+                Some(137) => Ok(SubmissionResults { verdict:Verdict::MemoryLimitExceeded, metrics }),
+                _ => Ok(SubmissionResults { verdict: Verdict::RunTimeError, metrics }),
+            }
+        },
+        Ok(Err(_)) => Ok(SubmissionResults { verdict: Verdict::Pending, metrics: Metric { runtime_ms: None, peak_memory_kb: None} }),
+        Err(_) => Ok(SubmissionResults { verdict: Verdict::TimeLimitExceeded, metrics: Metric { runtime_ms: Some(problem.runtime_ms), peak_memory_kb: None } })
+    }
+}
+
+async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
+    if new_metric.runtime_ms.is_some() {
+        old_metric.runtime_ms = max(old_metric.runtime_ms, new_metric.runtime_ms);
+    }
+    
+    if new_metric.peak_memory_kb.is_some() {
+        old_metric.peak_memory_kb = max(old_metric.peak_memory_kb, new_metric.peak_memory_kb);
+    }
 }
 
 async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
@@ -184,10 +210,12 @@ async fn run_with_docker(
     judge_volume: &JudgeVolume
 ) -> Result<Output,DockerError> {
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
-    let redirect_test = format!(r#"./"{}" < "/app/inputs/{}""#,compiled_file,test_cases);
-
+    let redirect_test = format!(
+    r#"./"{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#, 
+    compiled_file, test_cases
+    );
     let child = Command::new("docker")
-        .args(["run","--name",docker_name, "--rm"])       
+        .args(["run","--name",docker_name])       
         .args(["--memory", memory_limit])       
         .args(["--cpus", "1.0"])           
         .args(["--network", "none"])       
@@ -213,3 +241,43 @@ async fn write_out_to_file(output: &str, dir: &PathBuf, file_name: &str) -> io::
     Ok(file_name.to_string())
 }
 
+async fn docker_metrics(
+    output: &Output,
+    docker_name: &str
+) -> Result<Metric, DockerError> {
+    let inspect_child = Command::new("docker")
+        .args(["inspect", docker_name, "--format", "{{.State.StartedAt}} {{.State.FinishedAt}}"])
+        .output()
+        .await?;
+    let inspect_str = String::from_utf8_lossy(&inspect_child.stdout);
+    let timestamps: Vec<&str> = inspect_str.split_whitespace().collect();
+    let mut duration_ms = 0;
+
+    if timestamps.len() == 2 {
+        let started_at = DateTime::parse_from_rfc3339(timestamps[0])?.with_timezone(&Utc);
+        let finished_at = DateTime::parse_from_rfc3339(timestamps[1])?.with_timezone(&Utc);
+        duration_ms = finished_at.signed_duration_since(started_at).num_milliseconds();
+    }
+
+   let stderr_str = String::from_utf8_lossy(&output.stderr);
+    let mut peak_memory_kb = 0;
+    
+    for line in stderr_str.lines() {
+        if line.starts_with("JUDGE_MEM:") {
+            let bytes_str = line["JUDGE_MEM:".len()..].trim();
+            if let Ok(bytes) = bytes_str.parse::<u64>() {
+                peak_memory_kb = bytes as i64 / 1024;
+            }
+        }
+    }
+
+    Ok(Metric { runtime_ms: Some(duration_ms), peak_memory_kb: Some(peak_memory_kb) })
+}
+
+async fn kill_container(docker_name:&str) -> std::io::Result<()>{
+    let _ = Command::new("docker")
+        .args(["rm", docker_name])                                                              
+        .output()
+        .await?;
+    Ok(())
+}
