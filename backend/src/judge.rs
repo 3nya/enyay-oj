@@ -138,7 +138,7 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
                 },
                 Some(137) => Ok(SubmissionResults { verdict:Verdict::MemoryLimitExceeded, metrics }),
                 _ =>{
-                    let _ = extract_runtime_error(&output.stderr,source_code);
+                    let _ = extract_runtime_error(&output.stderr,source_code).await;
                     Ok(SubmissionResults { verdict: Verdict::RunTimeError, metrics })
                 } 
             }
@@ -231,6 +231,25 @@ async fn docker_metrics(
     Ok(Metric { runtime_ms: Some(duration_ms), peak_memory_kb: Some(peak_memory_kb) })
 }
 
+async fn extract_runtime_error(raw_stderr: &[u8], file_name: &str) -> String {
+
+    let stderr_str = String::from_utf8_lossy(raw_stderr);
+    
+
+    let mut actual_stderr = String::new();
+
+    for line in stderr_str.lines() {
+        if line.starts_with(file_name) && !line.is_empty() {
+            if !actual_stderr.is_empty() {
+                actual_stderr.push('\n');
+            }
+            actual_stderr.push_str(&line[file_name.len()+1..]);
+        } 
+    }
+    println!("{}",actual_stderr);
+    actual_stderr
+}
+
 async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
     if new_metric.runtime_ms.is_some() {
         old_metric.runtime_ms = max(old_metric.runtime_ms, new_metric.runtime_ms);
@@ -292,23 +311,4 @@ async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotS
         None => return Err(LanguageNotSupportedError)
     }
     Language::from_str(language)
-}
-
-fn extract_runtime_error(raw_stderr: &[u8], file_name: &str) -> String {
-
-    let stderr_str = String::from_utf8_lossy(raw_stderr);
-    
-
-    let mut actual_stderr = String::new();
-
-    for line in stderr_str.lines() {
-        if line.starts_with(file_name) && !line.is_empty() {
-            if !actual_stderr.is_empty() {
-                actual_stderr.push('\n');
-            }
-            actual_stderr.push_str(&line[file_name.len()+1..]);
-        } 
-    }
-    println!("{}",actual_stderr);
-    actual_stderr
 }
