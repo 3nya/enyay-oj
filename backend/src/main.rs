@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::{Language, Verdict, insert_submission};
+use crate::enyay::{Language, Verdict, insert_problem, insert_submission, insert_testcase};
 
 #[derive(Clone)]
 struct AppState {
@@ -333,12 +333,18 @@ async fn main() -> Result<(),ApiError>{
     r#"
     #include <iostream>
     #include <vector>
+
     int main(){
-        std::vector<int> n (5,0);
-        std::cout >> n[1000];
+        int n; std::cin >> n;
+        while(true){}
+        //std::vector<int> ab (1000000000,0);
+        while(n-- > 0){
+            int val; std::cin >> val;
+            std::cout << (val+1) << "\n";
+        }
         return 0;
     }
-    "#).await;
+    "#).await.expect("Failed to insert to db");
 
     let judge_volume = judge::JudgeVolume::new().unwrap();
 
@@ -349,7 +355,10 @@ async fn main() -> Result<(),ApiError>{
 
     let result = judge::judge_submission(most_recent,&judge_volume,&app_state).await;
     match result {
-        Ok(res) => println!("{}",res),
+        Ok(res) => {
+            println!("{}",res.verdict);
+            println!("{:?}",res.metrics);
+        }
         Err(_) => println!("Could not complete request")
     }
     Ok(())
