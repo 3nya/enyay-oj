@@ -110,7 +110,7 @@ impl std::error::Error for LanguageNotSupportedError{}
 impl Language{
     pub fn as_str(&self) -> [&'static str;2]{
         match self{
-            Self::GCC14 => ["gcc:14", "g++"]
+            Self::GCC14 => ["gcc:14", "g++ -O2 -fsanitize=address,undefined -fno-sanitize-recover=all"]
         }
     }
 

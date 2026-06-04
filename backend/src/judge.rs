@@ -84,7 +84,7 @@ pub async fn judge_submission(
 
     let submission_results: SubmissionResults;
     if !compile_status.success() {submission_results = SubmissionResults { verdict: Verdict::CompileError, metrics: Metric { runtime_ms: None, peak_memory_kb: None } }}
-    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary, language.as_str()).await?}
+    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary,&source_code_file, language.as_str()).await?}
     update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
     Ok(submission_results)
 }
@@ -95,6 +95,7 @@ async fn run_tests(
     judge_volume: &JudgeVolume, 
     app_state: &AppState,
     binary_file: &str,
+    source_code: &str,
     compiler: [&str;2]
 )-> Result<SubmissionResults,Box<dyn std::error::Error>> {
     let test_cases = get_test_cases(&app_state.pool, problem.problem_id).await?;
@@ -109,7 +110,7 @@ async fn run_tests(
             Duration::from_millis(problem.runtime_ms as u64),
     run_with_docker(problem, binary_file, &input_file, compiler, &container_name,judge_volume)
         ).await;
-        let submission_results = check_sol(user_sol, input,&container_name,problem).await?;
+        let submission_results = check_sol(user_sol, input,&container_name, source_code, problem).await?;
         verdict = submission_results.verdict;
         update_metric(& mut metrics, &submission_results.metrics).await;
         kill_container(&container_name).await?;
@@ -124,7 +125,7 @@ async fn run_tests(
 
 }
 
-async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&TestCase, container_name: &str, problem : &Problem) -> Result<SubmissionResults,DockerError>{
+async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&TestCase, container_name: &str, source_code: &str,problem : &Problem) -> Result<SubmissionResults,DockerError>{
     match user_sol {
         Ok(Ok(output)) => {
             let metrics = docker_metrics(&output, container_name).await?;
@@ -136,7 +137,10 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
                     Ok(SubmissionResults { verdict:Verdict::WrongAnswer, metrics })
                 },
                 Some(137) => Ok(SubmissionResults { verdict:Verdict::MemoryLimitExceeded, metrics }),
-                _ => Ok(SubmissionResults { verdict: Verdict::RunTimeError, metrics }),
+                _ =>{
+                    let _ = extract_runtime_error(&output.stderr,source_code);
+                    Ok(SubmissionResults { verdict: Verdict::RunTimeError, metrics })
+                } 
             }
         },
         Ok(Err(_)) => Ok(SubmissionResults { verdict: Verdict::Pending, metrics: Metric { runtime_ms: None, peak_memory_kb: None} }),
@@ -156,7 +160,8 @@ async fn compile_with_docker(
         .args(["--user", "1000:1000"])
         .args(["-w","/app/workspace"])
         .arg(compiler[0])
-        .args([compiler[1],file_name, "-o", &compiled_file])
+        .args(compiler[1].split_whitespace())
+        .args([file_name, "-o", &compiled_file])
         .status()
         .await?;
     Ok(compile)
@@ -172,8 +177,8 @@ async fn run_with_docker(
 ) -> Result<Output,DockerError> {
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
     let redirect_test = format!(
-    r#"./"{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#, 
-    compiled_file, test_cases
+        r#"./"{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#, 
+        compiled_file, test_cases
     );
     let child = Command::new("docker")
         .args(["run","--name",docker_name])       
@@ -230,6 +235,12 @@ async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
     if new_metric.runtime_ms.is_some() {
         old_metric.runtime_ms = max(old_metric.runtime_ms, new_metric.runtime_ms);
     }
+
+    if let Some(val) = old_metric.runtime_ms{
+        if val < 0 {
+            old_metric.runtime_ms = None;
+        }
+    }
     
     if new_metric.peak_memory_kb.is_some() {
         old_metric.peak_memory_kb = max(old_metric.peak_memory_kb, new_metric.peak_memory_kb);
@@ -238,7 +249,7 @@ async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
 
 async fn kill_container(docker_name:&str) -> std::io::Result<()>{
     let _ = Command::new("docker")
-        .args(["rm", "-v",docker_name])                                                              
+        .args(["rm", "-f", "-v",docker_name])                                                              
         .output()
         .await?;
     Ok(())
@@ -281,4 +292,23 @@ async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotS
         None => return Err(LanguageNotSupportedError)
     }
     Language::from_str(language)
+}
+
+fn extract_runtime_error(raw_stderr: &[u8], file_name: &str) -> String {
+
+    let stderr_str = String::from_utf8_lossy(raw_stderr);
+    
+
+    let mut actual_stderr = String::new();
+
+    for line in stderr_str.lines() {
+        if line.starts_with(file_name) && !line.is_empty() {
+            if !actual_stderr.is_empty() {
+                actual_stderr.push('\n');
+            }
+            actual_stderr.push_str(&line[file_name.len()+1..]);
+        } 
+    }
+    println!("{}",actual_stderr);
+    actual_stderr
 }
