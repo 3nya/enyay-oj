@@ -1,5 +1,5 @@
 use tokio::{process::Command,fs,time::{timeout,Duration}};
-use std::{fmt::{self}, io, str::FromStr};
+use std::{fmt::{self}, io, os::unix::process::ExitStatusExt, str::FromStr};
 use std::{path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
 use chrono::{DateTime, Utc};
 use crate::{AppState, enyay::*};
@@ -79,13 +79,14 @@ pub async fn judge_submission(
     let _ = write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await;
 
     let binary = format!("{}_{}.out",problem.problem_name,submission.submission_id);
-    let compile_status = compile_with_docker(&binary, &source_code_file, language.as_str(), judge_volume).await?;
-    let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
+    let compile_status = compile_with_docker(&binary, &source_code_file, language, judge_volume).await?;
+    
 
     let submission_results: SubmissionResults;
     if !compile_status.success() {submission_results = SubmissionResults { verdict: Verdict::CompileError, metrics: Metric { runtime_ms: None, peak_memory_kb: None } }}
-    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary,&source_code_file, language.as_str()).await?}
+    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary,&source_code_file, language).await?}
     update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
+    let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
     Ok(submission_results)
 }
 
@@ -96,7 +97,7 @@ async fn run_tests(
     app_state: &AppState,
     binary_file: &str,
     source_code: &str,
-    compiler: [&str;2]
+    language: Language
 )-> Result<SubmissionResults,Box<dyn std::error::Error>> {
     let test_cases = get_test_cases(&app_state.pool, problem.problem_id).await?;
 
@@ -108,7 +109,7 @@ async fn run_tests(
         let _ = write_out_to_file(&input.input, &judge_volume.input_dir, &input_file).await;
         let user_sol = timeout(
             Duration::from_millis(problem.runtime_ms as u64),
-    run_with_docker(problem, binary_file, &input_file, compiler, &container_name,judge_volume)
+    run_with_docker(problem, binary_file, source_code,&input_file, language, &container_name,judge_volume)
         ).await;
         let submission_results = check_sol(user_sol, input,&container_name, source_code, problem).await?;
         verdict = submission_results.verdict;
@@ -118,8 +119,8 @@ async fn run_tests(
             break;
         }
     }
-    cleanup(&input_file, binary_file, judge_volume).await?;
-    //when crashes occur due to MLE or TLE, metrics is not calculated properly
+    let _ = cleanup(&input_file, binary_file, judge_volume).await;
+    //when crashes occur due to MLE or TLE, metrics is not calculated properly but we can assume they maxed resource usage
     if verdict == Verdict::MemoryLimitExceeded { metrics.peak_memory_kb = Some(problem.memory_mb*1024); }
     Ok(SubmissionResults { verdict, metrics})
 
@@ -151,17 +152,20 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
 async fn compile_with_docker(
     compiled_file:&str,
     file_name: &str, 
-    compiler: [&str;2], 
+    language: Language, 
     judge_volume: &JudgeVolume
 ) -> Result<ExitStatus,DockerError> {
+    let command = language.compile_command(file_name, compiled_file);
+    if command.is_empty() {
+        return Ok(ExitStatus::from_raw(0))
+    }
     let compile = Command::new("docker")
         .args(["run","--rm"])
         .args(["-v",&judge_volume.user_volume_mount])
         .args(["--user", "1000:1000"])
         .args(["-w","/app/workspace"])
-        .arg(compiler[0])
-        .args(compiler[1].split_whitespace())
-        .args([file_name, "-o", &compiled_file])
+        .arg(language.as_img())
+        .args(command)
         .status()
         .await?;
     Ok(compile)
@@ -170,16 +174,13 @@ async fn compile_with_docker(
 async fn run_with_docker(
     question:&Problem, 
     compiled_file:&str, 
+    source_code: &str,
     test_cases:&str,
-    compiler:[&str;2], 
+    language:Language, 
     docker_name: &str,
     judge_volume: &JudgeVolume
 ) -> Result<Output,DockerError> {
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
-    let redirect_test = format!(
-        r#"./"{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#, 
-        compiled_file, test_cases
-    );
     let child = Command::new("docker")
         .args(["run","--name",docker_name])       
         .args(["--memory", memory_limit])       
@@ -189,8 +190,8 @@ async fn run_with_docker(
         .args(["-v",&judge_volume.user_volume_mount])
         .args(["--user", "1000:1000"])
         .args(["-w", "/app/workspace"])
-        .arg(compiler[0])
-        .args(["sh", "-c", &redirect_test])
+        .arg(language.as_img())
+        .args(["sh", "-c", &language.run_command(source_code, compiled_file, test_cases)])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -231,22 +232,24 @@ async fn docker_metrics(
     Ok(Metric { runtime_ms: Some(duration_ms), peak_memory_kb: Some(peak_memory_kb) })
 }
 
-async fn extract_runtime_error(raw_stderr: &[u8], file_name: &str) -> String {
+async fn extract_runtime_error(raw_stderr: &[u8], _file_name: &str) -> String {
 
     let stderr_str = String::from_utf8_lossy(raw_stderr);
     
 
     let mut actual_stderr = String::new();
 
+    //just realized the format only worked for c++
     for line in stderr_str.lines() {
-        if line.starts_with(file_name) && !line.is_empty() {
+        if !line.starts_with("JUDGE_MEM") && !line.is_empty() {
+            println!("{line}");
             if !actual_stderr.is_empty() {
                 actual_stderr.push('\n');
             }
-            actual_stderr.push_str(&line[file_name.len()+1..]);
+            //actual_stderr.push_str(&line[file_name.len()+1..]);
         } 
     }
-    println!("{}",actual_stderr);
+    //println!("{}",actual_stderr);
     actual_stderr
 }
 

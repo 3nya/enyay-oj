@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt::{self}, str::FromStr};
 
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
@@ -96,7 +96,8 @@ impl FromStr for Verdict {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language{
-    GCC14
+    GCC14,
+    PYTHON3_12,
 }
 #[derive(Debug)]
 pub struct LanguageNotSupportedError;
@@ -108,15 +109,47 @@ impl fmt::Display for LanguageNotSupportedError {
 impl std::error::Error for LanguageNotSupportedError{}
 
 impl Language{
-    pub fn as_str(&self) -> [&'static str;2]{
+    pub fn as_img(&self) -> &'static str{
         match self{
-            Self::GCC14 => ["gcc:14", "g++ -O2 -fsanitize=address,undefined -fno-sanitize-recover=all"]
+            Self::GCC14 => "gcc:14",
+            Self::PYTHON3_12 => "python:3.12-slim"
         }
     }
 
     pub fn as_exten(&self) -> &'static str {
         match self {
-            Self::GCC14 => ".cpp"
+            Self::GCC14 => ".cpp",
+            Self::PYTHON3_12 => ".py"
+        }
+    }
+
+    pub fn compile_command(&self, file_name:&str, compiled_file:&str) -> Vec<String>{
+        match self{
+            Self::GCC14 => {
+                vec![
+                    String::from("g++"),
+                    String::from("-O2"),
+                    String::from("-fsanitize=address,undefined"),
+                    String::from("-fno-sanitize-recover=all"),
+                    file_name.to_string(),
+                    String::from("-o"),
+                    compiled_file.to_string()
+                ]
+            }
+            Self::PYTHON3_12 => {
+                vec![]
+            }
+        }
+    }
+
+    pub fn run_command(&self, source_code:&str, compiled_file:&str, test_cases: &str) -> String{
+        match self{
+            Self::GCC14 => format!(
+                r#"./"{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#, 
+            compiled_file, test_cases),
+            Self::PYTHON3_12 => format!(
+                r#"python3 "{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#,
+                source_code, test_cases)
         }
     }
 }
@@ -127,6 +160,7 @@ impl FromStr for Language{
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s{
             "c++20" => Ok(Self::GCC14),
+            "python3" => Ok(Self::PYTHON3_12),
             _ => Err(LanguageNotSupportedError)
         }
     }
