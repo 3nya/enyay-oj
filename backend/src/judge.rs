@@ -112,10 +112,10 @@ async fn run_tests(
         let submission_results = check_sol(user_sol, input,&container_name,problem).await?;
         verdict = submission_results.verdict;
         update_metric(& mut metrics, &submission_results.metrics).await;
+        kill_container(&container_name).await?;
         if verdict != Verdict::Accepted {
             break;
         }
-        kill_container(&container_name).await?;
     }
     cleanup(&input_file, binary_file, judge_volume).await?;
     //when crashes occur due to MLE or TLE, metrics is not calculated properly

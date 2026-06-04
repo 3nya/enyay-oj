@@ -38,7 +38,7 @@ CREATE TABLE submissions (
     runtime_ms BIGINT,
     memory_kb BIGINT,
     
-    source_code VARCHAR(255),
+    source_code TEXT NOT NULL,
     language VARCHAR(255),
 
     submitted_time TIMESTAMP
