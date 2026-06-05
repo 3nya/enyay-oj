@@ -103,6 +103,13 @@ struct CreateProblemRequest {
 }
 
 #[derive(Deserialize)]
+struct CreateTestCaseRequest {
+    problem_id: i64,
+    testcases: String,
+    solution: String
+}
+
+#[derive(Deserialize)]
 struct CreateSubmissionRequest {
     submission_id: Option<i64>,
     user_id: i64,
@@ -191,6 +198,25 @@ async fn create_problem(
     .await?;
 
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn create_testcase(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateTestCaseRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    if payload.problem_id <= 0 {
+        return Err(ApiError::BadRequest("Problem id must be positive".to_string()));
+    }
+    if payload.solution.trim().is_empty() || payload.testcases.trim().is_empty() {
+        return Err(ApiError::BadRequest("Testcases and solutions must not be empty".to_string()));
+    }
+    let id = enyay::insert_testcase(
+        &state.pool,
+        payload.problem_id,
+        &payload.testcases, 
+        &payload.solution)
+        .await?;
+    Ok((StatusCode::CREATED,Json(IdResponse { id })))
 }
 
 async fn get_problem(
