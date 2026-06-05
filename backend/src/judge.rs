@@ -113,7 +113,7 @@ async fn run_tests(
         ).await;
         let submission_results = check_sol(user_sol, input,&container_name, source_code, problem).await?;
         verdict = submission_results.verdict;
-        update_metric(& mut metrics, &submission_results.metrics).await;
+        update_metric(& mut metrics, &submission_results.metrics);
         kill_container(&container_name).await?;
         if verdict != Verdict::Accepted {
             break;
@@ -132,7 +132,7 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
             let metrics = docker_metrics(&output, container_name).await?;
             match output.status.code() {
                 Some(0) => {
-                    if String::from_utf8_lossy(&output.stdout).into_owned().trim() == input.solution.trim() {
+                    if normalize_output(&String::from_utf8_lossy(&output.stdout).into_owned()) == normalize_output(&input.solution) {
                         return Ok(SubmissionResults { verdict:Verdict::Accepted, metrics });
                     }
                     Ok(SubmissionResults { verdict:Verdict::WrongAnswer, metrics })
@@ -147,6 +147,17 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
         Ok(Err(_)) => Ok(SubmissionResults { verdict: Verdict::Pending, metrics: Metric { runtime_ms: None, peak_memory_kb: None} }),
         Err(_) => Ok(SubmissionResults { verdict: Verdict::TimeLimitExceeded, metrics: Metric { runtime_ms: Some(problem.runtime_ms), peak_memory_kb: None } })
     }
+}
+
+fn normalize_output(str: &str) -> String{
+    str
+        .trim()
+        .replace("\t", " ")
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<&str>>()
+        .join("\n")
+        .to_string()
 }
 
 async fn compile_with_docker(
@@ -183,7 +194,10 @@ async fn run_with_docker(
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
     let child = Command::new("docker")
         .args(["run","--name",docker_name])       
-        .args(["--memory", memory_limit])       
+        .args(["--memory", memory_limit])
+        .args(["--pids-limit", "32"])
+        .args(["--log-driver", "json-file"])
+        .args(["--log-opt", "max-size=10m"])       
         .args(["--cpus", "1.0"])           
         .args(["--network", "none"])       
         .args(["-v", &judge_volume.input_volume_mount])
@@ -253,7 +267,7 @@ async fn extract_runtime_error(raw_stderr: &[u8], _file_name: &str) -> String {
     actual_stderr
 }
 
-async fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
+fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
     if new_metric.runtime_ms.is_some() {
         old_metric.runtime_ms = max(old_metric.runtime_ms, new_metric.runtime_ms);
     }
