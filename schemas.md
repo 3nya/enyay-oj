@@ -11,6 +11,7 @@ located at `localhost:8080`, login with user `root` and password.
 ```sql
 CREATE TABLE problems (
     problem_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    problem_rating INT,
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
     memory_mb BIGINT

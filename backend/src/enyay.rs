@@ -15,6 +15,7 @@ pub struct Problem {
     pub problem_name: String,
     pub runtime_ms: i64,
     pub memory_mb: i64,
+    pub problem_rating: i32
 }
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct TestCase {
@@ -226,16 +227,18 @@ pub async fn insert_problem(
     problem_name: &str,
     runtime_ms: i64,
     memory_mb: i64,
+    problem_rating: i32
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO problems (problem_name, runtime_ms, memory_mb)
-        VALUES (?, ?, ?)
+        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating)
+        VALUES (?, ?, ?, ?)
         "#,
     )
     .bind(problem_name)
     .bind(runtime_ms)
     .bind(memory_mb)
+    .bind(problem_rating)
     .execute(pool)
     .await?;
 
@@ -248,7 +251,7 @@ pub async fn get_problem(
 ) -> Result<Option<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating
         FROM problems
         WHERE problem_id = ?
         "#,

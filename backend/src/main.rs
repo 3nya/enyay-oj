@@ -99,6 +99,7 @@ struct CreateProblemRequest {
     problem_name: String,
     runtime_ms: i64,
     memory_kb: i64,
+    problem_rating: i32
 }
 
 #[derive(Deserialize)]
@@ -185,6 +186,7 @@ async fn create_problem(
         payload.problem_name.trim(),
         payload.runtime_ms,
         payload.memory_kb,
+        payload.problem_rating
     )
     .await?;
 
@@ -329,22 +331,11 @@ async fn main() -> Result<(),ApiError>{
         .connect(&db_url)
         .await?;
     println!("connected to database");
-    let _ = insert_submission(&pool, 1, 1, Verdict::Pending, None, None, Some("c++20"), 
-    r#"
-    #include <iostream>
-    #include <vector>
-
-    int main(){
-        int n; std::cin >> n;
-        while(true){}
-        //std::vector<int> ab (1000000000,0);
-        while(n-- > 0){
-            int val; std::cin >> val;
-            std::cout << (val+1) << "\n";
-        }
-        return 0;
-    }
-    "#).await.expect("Failed to insert to db");
+    insert_problem(&pool, "Triple T", 1000, 64, 4000).await?;
+   /*let _ = insert_submission(&pool, 1, 1, Verdict::Pending, None, None, Some("python3"), 
+    r#"n = int(input())
+while True:
+    print(2)"#).await.expect("Failed to insert to db");*/
 
     let judge_volume = judge::JudgeVolume::new().unwrap();
 
