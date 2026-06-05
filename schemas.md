@@ -19,6 +19,7 @@ CREATE TABLE problems (
 ### testcases
 ```sql
 CREATE TABLE testcases (
+    test_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     problem_id BIGINT NOT NULL,
     input TEXT NOT NULL,
     solution TEXT NOT NULL,
