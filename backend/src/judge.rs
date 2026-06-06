@@ -113,10 +113,11 @@ async fn run_tests(
             Duration::from_millis(problem.runtime_ms as u64),
     run_with_docker(problem, binary_file, source_code,&input_file, language, &container_name,judge_volume)
         ).await;
-        let submission_results = check_sol(user_sol, input,&container_name, source_code, problem).await?;
+        let submission_results = check_sol(user_sol, input,&container_name, source_code, problem).await;
+        let _ = kill_container(&container_name).await;
+        let submission_results = submission_results?;
         verdict = submission_results.verdict;
         update_metric(& mut metrics, &submission_results.metrics);
-        kill_container(&container_name).await?;
         if verdict != Verdict::Accepted {
             break;
         }
@@ -207,7 +208,8 @@ async fn run_with_docker(
 ) -> Result<Output,DockerError> {
     let memory_limit = &format!("{}m",question.memory_mb.to_string());
     let child = Command::new("docker")
-        .args(["run","--name",docker_name])       
+        .args(["run","--name",docker_name])
+        .args(["--label", "enyay-oj-judge=true"])       
         .args(["--memory", memory_limit])
         .args(["--cap-drop", "ALL"])
         .args(["--security-opt", "no-new-privileges"])
@@ -303,6 +305,24 @@ async fn kill_container(docker_name:&str) -> std::io::Result<()>{
     let _ = Command::new("docker")
         .args(["rm", "-f", "-v",docker_name])                                                              
         .output()
+        .await?;
+    Ok(())
+}
+
+pub async fn cleanup_containers() -> io::Result<()> {
+    let output = Command::new("docker")
+        .args(["ps", "-aq", "--filter","label=enyay-oj-judge=true"])
+        .output()
+        .await?;
+    let ids = String::from_utf8_lossy(&output.stdout);
+    let ids: Vec<&str> = ids.split_whitespace().collect();
+    if ids.is_empty(){
+        return Ok(())
+    }
+    Command::new("docker")
+        .args(["rm","-f","-v"])
+        .arg("ids")
+        .status()
         .await?;
     Ok(())
 }
