@@ -24,6 +24,7 @@ impl JudgeVolume{
         let output_dir = whole_dir.join("user_inputs");
         let input_dir = whole_dir.join("test_cases");
         std::fs::create_dir_all(&input_dir)?;
+        std::fs::create_dir_all(&output_dir)?;
 
         Ok(Self { 
             input_dir: input_dir.to_owned(),
@@ -84,7 +85,8 @@ pub async fn judge_submission(
 
     let submission_results: SubmissionResults;
     if !compile_status.success() {submission_results = SubmissionResults { verdict: Verdict::CompileError, metrics: Metric { runtime_ms: None, peak_memory_kb: None } }}
-    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary,&source_code_file, language).await?}
+    else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary,&source_code_file, language).await
+    .unwrap_or(SubmissionResults { verdict: Verdict::JudgeFailure, metrics: Metric { runtime_ms: None, peak_memory_kb: None } })}
     update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
     let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
     Ok(submission_results)
@@ -101,7 +103,7 @@ async fn run_tests(
 )-> Result<SubmissionResults,Box<dyn std::error::Error>> {
     let test_cases = get_test_cases(&app_state.pool, problem.problem_id).await?;
 
-    let input_file = format!("{}_input.txt",problem.problem_name);
+    let input_file = format!("{}_input_id_{}.txt",problem.problem_name,submission.submission_id);
     let mut verdict = Verdict::Accepted;
     let mut metrics = Metric{runtime_ms: None, peak_memory_kb: None};
     for (i,input) in test_cases.iter().enumerate(){
@@ -126,13 +128,20 @@ async fn run_tests(
 
 }
 
-async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&TestCase, container_name: &str, source_code: &str,problem : &Problem) -> Result<SubmissionResults,DockerError>{
+async fn check_sol<E>(
+    user_sol:Result<Result<Output,DockerError>,E>, 
+    input:&TestCase, 
+    container_name: &str, 
+    source_code: &str,
+    problem : &Problem
+) -> Result<SubmissionResults,DockerError>{
     match user_sol {
         Ok(Ok(output)) => {
             let metrics = docker_metrics(&output, container_name).await?;
             match output.status.code() {
                 Some(0) => {
-                    if normalize_output(&String::from_utf8_lossy(&output.stdout).into_owned()) == normalize_output(&input.solution) {
+                    if normalize_output(&String::from_utf8_lossy(&output.stdout).into_owned())
+                     == normalize_output(&input.solution) {
                         return Ok(SubmissionResults { verdict:Verdict::Accepted, metrics });
                     }
                     Ok(SubmissionResults { verdict:Verdict::WrongAnswer, metrics })
@@ -144,8 +153,10 @@ async fn check_sol<E>(user_sol:Result<Result<Output,DockerError>,E>, input:&Test
                 } 
             }
         },
-        Ok(Err(_)) => Ok(SubmissionResults { verdict: Verdict::Pending, metrics: Metric { runtime_ms: None, peak_memory_kb: None} }),
-        Err(_) => Ok(SubmissionResults { verdict: Verdict::TimeLimitExceeded, metrics: Metric { runtime_ms: Some(problem.runtime_ms), peak_memory_kb: None } })
+        Ok(Err(_)) => Ok(SubmissionResults { verdict: Verdict::JudgeFailure, 
+            metrics: Metric { runtime_ms: None, peak_memory_kb: None} }),
+        Err(_) => Ok(SubmissionResults { verdict: Verdict::TimeLimitExceeded, 
+            metrics: Metric { runtime_ms: Some(problem.runtime_ms), peak_memory_kb: None } })
     }
 }
 
@@ -172,6 +183,9 @@ async fn compile_with_docker(
     }
     let compile = Command::new("docker")
         .args(["run","--rm"])
+        .args(["--network", "none"])
+        .args(["--cap-drop", "ALL"])
+        .args(["--security-opt", "no-new-privileges"])
         .args(["-v",&judge_volume.user_volume_mount])
         .args(["--user", "1000:1000"])
         .args(["-w","/app/workspace"])
@@ -195,6 +209,8 @@ async fn run_with_docker(
     let child = Command::new("docker")
         .args(["run","--name",docker_name])       
         .args(["--memory", memory_limit])
+        .args(["--cap-drop", "ALL"])
+        .args(["--security-opt", "no-new-privileges"])
         .args(["--pids-limit", "32"])
         .args(["--log-driver", "json-file"])
         .args(["--log-opt", "max-size=10m"])       

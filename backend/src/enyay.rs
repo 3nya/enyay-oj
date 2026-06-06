@@ -44,7 +44,8 @@ pub enum Verdict {
     TimeLimitExceeded,
     MemoryLimitExceeded,
     RunTimeError,
-    CompileError
+    CompileError,
+    JudgeFailure
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +53,7 @@ pub struct ParseVerdictError;
 
 impl fmt::Display for ParseVerdictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("expected one of PENDING, AC, WA, TLE, or MLE")
+        f.write_str("expected one of PENDING, AC, WA, TLE, MLE, RE, CE Or JF")
     }
 }
 
@@ -67,7 +68,8 @@ impl Verdict {
             Self::TimeLimitExceeded => "TLE",
             Self::MemoryLimitExceeded => "MLE",
             Self::RunTimeError => "RE",
-            Self::CompileError => "CE"
+            Self::CompileError => "CE",
+            Self::JudgeFailure => "JF"
         }
     }
 }
@@ -90,6 +92,7 @@ impl FromStr for Verdict {
             "MLE" => Ok(Self::MemoryLimitExceeded),
             "RE" => Ok(Self::RunTimeError),
             "CE" => Ok(Self::CompileError),
+            "JF" => Ok(Self::JudgeFailure),
             _ => Err(ParseVerdictError),
         }
     }
@@ -267,7 +270,7 @@ pub async fn get_recent_problems(
 ) -> Result<Vec<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating
         FROM problems
         ORDER BY problem_id ASC
         LIMIT ?
