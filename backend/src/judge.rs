@@ -77,7 +77,7 @@ pub async fn judge_submission(
     let language = fetch_language(submission).await?;
 
     let source_code_file = format!("{}_code_submission_{}{}",problem.problem_name,submission.submission_id,language.as_exten());
-    let _ = write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await;
+    write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await?;
 
     let binary = format!("{}_{}.out",problem.problem_name,submission.submission_id);
     let compile_status = compile_with_docker(&binary, &source_code_file, language, judge_volume).await?;
@@ -108,7 +108,7 @@ async fn run_tests(
     let mut metrics = Metric{runtime_ms: None, peak_memory_kb: None};
     for (i,input) in test_cases.iter().enumerate(){
         let container_name = format!("sub_{}_test_{}_problem_{}", submission.submission_id, i,problem.problem_id);
-        let _ = write_out_to_file(&input.input, &judge_volume.input_dir, &input_file).await;
+        write_out_to_file(&input.input, &judge_volume.input_dir, &input_file).await?;
         let user_sol = timeout(
             Duration::from_millis(problem.runtime_ms as u64),
     run_with_docker(problem, binary_file, source_code,&input_file, language, &container_name,judge_volume)
@@ -302,7 +302,7 @@ fn update_metric(old_metric: &mut Metric, new_metric: &Metric){
 }
 
 async fn kill_container(docker_name:&str) -> std::io::Result<()>{
-    let _ = Command::new("docker")
+    Command::new("docker")
         .args(["rm", "-f", "-v",docker_name])                                                              
         .output()
         .await?;
@@ -321,7 +321,7 @@ pub async fn cleanup_containers() -> io::Result<()> {
     }
     Command::new("docker")
         .args(["rm","-f","-v"])
-        .arg("ids")
+        .args(ids)
         .status()
         .await?;
     Ok(())
@@ -342,8 +342,8 @@ async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
     Ok(())
 }
 async fn cleanup(input_file:&str, binary_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
-    let _ = delete_file(input_file, &judge_volume.input_dir).await?;
-    let _ = delete_file(binary_file, &judge_volume.output_dir).await?;
+    delete_file(input_file, &judge_volume.input_dir).await?;
+    delete_file(binary_file, &judge_volume.output_dir).await?;
     Ok(())
 }
 
