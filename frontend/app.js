@@ -110,7 +110,7 @@ async function renderHome() {
                     (problem) => `
                       <li>
                         <a href="/submit/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
-                        <span> ${escapeHtml(problem.runtime_ms)} ms, ${escapeHtml(problem.memory_mb)} MB</span>
+                        <span> ${escapeHtml(problem.runtime_ms)} ms, ${escapeHtml(problem.memory_mb)} MB, ${escapeHtml(problem.problem_rating)}</span>
                       </li>
                     `,
                   )
@@ -161,15 +161,17 @@ async function renderProblemset() {
     <section class="panel">
       <table class="problem-table" aria-label="Problemset">
         <colgroup>
-          <col style="width: 42%;">
-          <col style="width: 29%;">
-          <col style="width: 29%;">
+          <col style="width: 40%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
         </colgroup>
         <thead>
           <tr>
             <th>problem</th>
             <th>runtime</th>
             <th>memory</th>
+            <th>rating</th>
           </tr>
         </thead>
         <tbody>
@@ -182,13 +184,14 @@ async function renderProblemset() {
                         <td><a href="/submit/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a></td>
                         <td>${escapeHtml(problem.runtime_ms)} ms</td>
                         <td>${escapeHtml(problem.memory_mb)} MB</td>
+                        <td>${escapeHtml(problem.problem_rating)}</td>
                       </tr>
                     `,
                   )
                   .join("")
-              : `<tr><td class="empty-row" colspan="3">No problems found.</td></tr>`
+              : `<tr><td class="empty-row" colspan="4">No problems found.</td></tr>`
           }
-          ${visibleProblems.length ? `<tr><td class="empty-row" colspan="3"></td></tr>` : ""}
+          ${visibleProblems.length ? `<tr><td class="empty-row" colspan="4"></td></tr>` : ""}
         </tbody>
       </table>
     </section>
@@ -291,6 +294,8 @@ async function renderSubmit(problemId) {
                   <dd>${escapeHtml(problem.runtime_ms)} ms</dd>
                   <dt>memory</dt>
                   <dd>${escapeHtml(problem.memory_mb)} MB</dd>
+                  <dt>rating</dt>
+                  <dd>${escapeHtml(problem.problem_rating)}</dd>
                 </dl>
               `
               : `<p class="status">Select a problem to submit.</p>`
