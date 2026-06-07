@@ -257,12 +257,13 @@ async function renderSubmit(problemId) {
               <label for="language">language</label>
               <select id="language" name="language">
                 <option value="c++20">c++20</option>
+                <option value="python3">python3.12</option>
               </select>
             </div>
           </div>
           <div class="field">
             <label for="source-code">source code</label>
-            <textarea id="source-code" name="source_code" spellcheck="false" required>${escapeHtml(starterCode)}</textarea>
+            <textarea id="source-code" name="source_code" spellcheck="false" required></textarea>
           </div>
           <div class="actions">
             <button class="button" type="submit">submit</button>
@@ -302,8 +303,37 @@ async function renderSubmit(problemId) {
   document.querySelector("#problem-id")?.addEventListener("change", (event) => {
     navigate(`/submit/${event.target.value}`);
   });
-
   document.querySelector("#submission-form")?.addEventListener("submit", submitSolution);
+  const sourceCode = document.querySelector("#source-code");
+  if(sourceCode){
+    enableTabs(sourceCode);
+  }
+}
+
+function enableTabs(textarea) {
+  const tab = "    ";
+  textarea.addEventListener("keydown",(event) => {
+    if(event.key === "Tab") {
+      event.preventDefault();
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const value = textarea.value;
+      textarea.value = value.slice(0,start) + tab + value.slice(end);
+      textarea.selectionStart = textarea.selectionEnd = start+tab.length;
+      return;
+    } else if(event.key == "Backspace"){
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      if(start !== end || start < tab.length) return;
+      const value = textarea.value;
+      const selectedValue = value.slice(start - tab.length, start);
+      if(selectedValue === tab){
+        event.preventDefault();
+        textarea.value = value.slice(0,start-tab.length) + value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start - tab.length;
+      }
+    }
+  })
 }
 
 async function submitSolution(event) {
