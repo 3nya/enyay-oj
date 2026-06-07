@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::{Language, Verdict, insert_problem, insert_submission, insert_testcase};
+use crate::enyay::{Language, Verdict};
 
 #[derive(Clone)]
 struct AppState {
@@ -348,43 +348,7 @@ fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
 // Main function
 
 #[tokio::main]
-async fn main() -> Result<(),ApiError>{
-    load_env();
-    let db_url = std::env::var("DB_URL").unwrap();
-
-    let pool = MySqlPoolOptions::new()
-        .max_connections(5)
-        .connect(&db_url)
-        .await?;
-    println!("connected to database");
-    //insert_problem(&pool, "Triple T", 1000, 64, 4000).await?;
-   /*let _ = insert_submission(&pool, 1, 1, Verdict::Pending, None, None, Some("c++20"), 
-    r#"
-    #include<iostream>
-    int main(){
-        int n; std::cin << n;
-        return 0;
-    }"#).await.expect("Failed to insert to db");*/
-
-    let judge_volume = judge::JudgeVolume::new().unwrap();
-    judge::cleanup_containers().await?;
-
-    let app_state = AppState {pool};
-
-    let test_subs: Json<Vec<enyay::Submission>> = get_recent_submissions(State(app_state.clone())).await.expect("Failed to retrieve submission");
-    let most_recent = &test_subs.0[0];
-
-    let result = judge::judge_submission(most_recent,&judge_volume,&app_state).await;
-    match result {
-        Ok(res) => {
-            println!("{}",res.verdict);
-            println!("{:?}",res.metrics);
-        }
-        Err(_) => println!("Could not complete request")
-    }
-    Ok(())
-}
-/*async fn main() -> Result<(), ApiError> {
+async fn main() -> Result<(), ApiError> {
     load_env();
 
     let db_url = std::env::var("DB_URL").unwrap();
@@ -396,7 +360,8 @@ async fn main() -> Result<(),ApiError>{
         .connect(&db_url)
         .await?;
     println!("connected to database");
-
+    let judge_volume = judge::JudgeVolume::new()?;
+    judge::cleanup_containers().await?;
     let app = Router::new()
         .route("/health", get(health))
         .route("/users", get(get_users).post(create_user))
@@ -405,6 +370,7 @@ async fn main() -> Result<(),ApiError>{
         .route("/problems", post(create_problem))
         .route("/problems/all", get(get_recent_problems))
         .route("/problems/{problem_id}", get(get_problem))
+        .route("/problems/{problem_id}/testcases", post(create_testcase))
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
@@ -424,7 +390,7 @@ async fn main() -> Result<(),ApiError>{
     axum::serve(listener, app).await?;
 
     Ok(())
-}*/
+}
 
 fn load_env() {
     if dotenvy::dotenv().is_err() {
