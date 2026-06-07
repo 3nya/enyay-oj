@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::{Language, Verdict};
+use crate::enyay::{Verdict};
 
 #[derive(Clone)]
 struct AppState {
@@ -405,7 +405,6 @@ async fn main() -> Result<(), ApiError> {
         .connect(&db_url)
         .await?;
     println!("connected to database");
-    let judge_volume = judge::JudgeVolume::new()?;
     judge::cleanup_containers().await?;
     let app = Router::new()
         .route("/", get(frontend_index))
