@@ -99,12 +99,12 @@ struct CreateProblemRequest {
     problem_name: String,
     runtime_ms: i64,
     memory_mb: i64,
-    problem_rating: i32
+    problem_rating: i32,
+    problem_statement: String
 }
 
 #[derive(Deserialize)]
 struct CreateTestCaseRequest {
-    problem_id: i64,
     testcases: String,
     solution: String
 }
@@ -221,6 +221,12 @@ async fn create_problem(
         ));
     }
 
+    if payload.problem_statement.is_empty() {
+        return Err(ApiError::BadRequest(
+            "problem statement cannot be empty".to_string()
+        ));
+    }
+
     if payload.runtime_ms <= 0 || payload.memory_mb <= 0 {
         return Err(ApiError::BadRequest(
             "runtime_ms and memory_kb must be positive".to_string(),
@@ -232,7 +238,8 @@ async fn create_problem(
         payload.problem_name.trim(),
         payload.runtime_ms,
         payload.memory_mb,
-        payload.problem_rating
+        payload.problem_rating,
+        &payload.problem_statement
     )
     .await?;
 
@@ -241,9 +248,10 @@ async fn create_problem(
 
 async fn create_testcase(
     State(state): State<AppState>,
+    Path(problem_id): Path<i64>,
     Json(payload): Json<CreateTestCaseRequest>
 ) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
-    if payload.problem_id <= 0 {
+    if problem_id <= 0 {
         return Err(ApiError::BadRequest("Problem id must be positive".to_string()));
     }
     if payload.solution.trim().is_empty() || payload.testcases.trim().is_empty() {
@@ -251,7 +259,7 @@ async fn create_testcase(
     }
     let id = enyay::insert_testcase(
         &state.pool,
-        payload.problem_id,
+        problem_id,
         &payload.testcases, 
         &payload.solution)
         .await?;

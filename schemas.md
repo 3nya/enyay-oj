@@ -14,7 +14,8 @@ CREATE TABLE problems (
     problem_rating INT,
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
-    memory_mb BIGINT
+    memory_mb BIGINT,
+    problem_statement TEXT
 );
 ```
 ### testcases
