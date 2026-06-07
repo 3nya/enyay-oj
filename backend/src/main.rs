@@ -367,6 +367,7 @@ async fn main() -> Result<(),ApiError>{
     }"#).await.expect("Failed to insert to db");*/
 
     let judge_volume = judge::JudgeVolume::new().unwrap();
+    judge::cleanup_containers().await?;
 
     let app_state = AppState {pool};
 
