@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt::{self}, str::FromStr};
 
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
@@ -14,7 +14,14 @@ pub struct Problem {
     pub problem_id: i64,
     pub problem_name: String,
     pub runtime_ms: i64,
-    pub memory_kb: i64,
+    pub memory_mb: i64,
+    pub problem_rating: i32
+}
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct TestCase {
+    pub problem_id: i64,
+    pub input: String,
+    pub solution: String
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -36,6 +43,9 @@ pub enum Verdict {
     WrongAnswer,
     TimeLimitExceeded,
     MemoryLimitExceeded,
+    RunTimeError,
+    CompileError,
+    JudgeFailure
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +53,7 @@ pub struct ParseVerdictError;
 
 impl fmt::Display for ParseVerdictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("expected one of PENDING, AC, WA, TLE, or MLE")
+        f.write_str("expected one of PENDING, AC, WA, TLE, MLE, RE, CE Or JF")
     }
 }
 
@@ -57,6 +67,9 @@ impl Verdict {
             Self::WrongAnswer => "WA",
             Self::TimeLimitExceeded => "TLE",
             Self::MemoryLimitExceeded => "MLE",
+            Self::RunTimeError => "RE",
+            Self::CompileError => "CE",
+            Self::JudgeFailure => "JF"
         }
     }
 }
@@ -77,7 +90,82 @@ impl FromStr for Verdict {
             "WA" => Ok(Self::WrongAnswer),
             "TLE" => Ok(Self::TimeLimitExceeded),
             "MLE" => Ok(Self::MemoryLimitExceeded),
+            "RE" => Ok(Self::RunTimeError),
+            "CE" => Ok(Self::CompileError),
+            "JF" => Ok(Self::JudgeFailure),
             _ => Err(ParseVerdictError),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language{
+    GCC14,
+    PYTHON3_12,
+}
+#[derive(Debug)]
+pub struct LanguageNotSupportedError;
+impl fmt::Display for LanguageNotSupportedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Selected langauge is not supported")
+    }
+}
+impl std::error::Error for LanguageNotSupportedError{}
+
+impl Language{
+    pub fn as_img(&self) -> &'static str{
+        match self{
+            Self::GCC14 => "gcc:14",
+            Self::PYTHON3_12 => "python:3.12-slim"
+        }
+    }
+
+    pub fn as_exten(&self) -> &'static str {
+        match self {
+            Self::GCC14 => ".cpp",
+            Self::PYTHON3_12 => ".py"
+        }
+    }
+
+    pub fn compile_command(&self, file_name:&str, compiled_file:&str) -> Vec<String>{
+        match self{
+            Self::GCC14 => {
+                vec![
+                    String::from("g++"),
+                    String::from("-O2"),
+                    String::from("-fsanitize=address,undefined"),
+                    String::from("-fno-sanitize-recover=all"),
+                    file_name.to_string(),
+                    String::from("-o"),
+                    compiled_file.to_string()
+                ]
+            }
+            Self::PYTHON3_12 => {
+                vec![]
+            }
+        }
+    }
+
+    pub fn run_command(&self, source_code:&str, compiled_file:&str, test_cases: &str) -> String{
+        match self{
+            Self::GCC14 => format!(
+                r#"./"{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#, 
+            compiled_file, test_cases),
+            Self::PYTHON3_12 => format!(
+                r#"python3 "{}" < "/app/inputs/{}"; EXIT_CODE=$?; M=$(cat /sys/fs/cgroup/memory.current 2>/dev/null); echo "JUDGE_MEM:$M" >&2; exit $EXIT_CODE"#,
+                source_code, test_cases)
+        }
+    }
+}
+
+impl FromStr for Language{
+    type Err = LanguageNotSupportedError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s{
+            "c++20" => Ok(Self::GCC14),
+            "python3" => Ok(Self::PYTHON3_12),
+            _ => Err(LanguageNotSupportedError)
         }
     }
 }
@@ -141,17 +229,19 @@ pub async fn insert_problem(
     pool: &MySqlPool,
     problem_name: &str,
     runtime_ms: i64,
-    memory_kb: i64,
+    memory_mb: i64,
+    problem_rating: i32
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO problems (problem_name, runtime_ms, memory_kb)
-        VALUES (?, ?, ?)
+        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating)
+        VALUES (?, ?, ?, ?)
         "#,
     )
     .bind(problem_name)
     .bind(runtime_ms)
-    .bind(memory_kb)
+    .bind(memory_mb)
+    .bind(problem_rating)
     .execute(pool)
     .await?;
 
@@ -164,7 +254,7 @@ pub async fn get_problem(
 ) -> Result<Option<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_kb
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating
         FROM problems
         WHERE problem_id = ?
         "#,
@@ -180,7 +270,7 @@ pub async fn get_recent_problems(
 ) -> Result<Vec<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_kb
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating
         FROM problems
         ORDER BY problem_id ASC
         LIMIT ?
@@ -190,6 +280,44 @@ pub async fn get_recent_problems(
     .fetch_all(pool)
     .await
 }
+
+pub async fn insert_testcase(
+    pool: &MySqlPool,
+    problem_id: i64,
+    testcases: &str,
+    solution: &str
+) -> Result<i64,sqlx::Error> {
+        let result = sqlx::query(
+        r#"
+        INSERT INTO testcases (problem_id, input, solution)
+        VALUES (?, ?, ?)
+        "#,
+    )
+    .bind(problem_id)
+    .bind(testcases)
+    .bind(solution)
+    .execute(pool)
+    .await?;
+    Ok(last_insert_id(result))
+}
+
+pub async fn get_test_cases(
+    pool: &MySqlPool,
+    problem_id: i64
+) -> Result<Vec<TestCase>,sqlx::Error>{
+    sqlx::query_as::<_, TestCase>(
+        r#"
+        SELECT problem_id, input, solution
+        FROM testcases 
+        WHERE problem_id = ?
+        "#,
+    )
+    .bind(problem_id)
+    .fetch_all(pool)
+    .await
+}
+
+
 
 pub async fn insert_submission(
     pool: &MySqlPool,

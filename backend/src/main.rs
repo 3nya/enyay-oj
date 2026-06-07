@@ -1,4 +1,5 @@
 mod enyay;
+mod judge;
 
 use std::{net::SocketAddr, str::FromStr};
 
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::Verdict;
+use crate::enyay::{Language, Verdict, insert_problem, insert_submission, insert_testcase};
 
 #[derive(Clone)]
 struct AppState {
@@ -26,6 +27,7 @@ enum ApiError {
     NotFound(String),
     Database(sqlx::Error),
     Io(std::io::Error),
+    Judge(String),
 }
 
 impl IntoResponse for ApiError {
@@ -45,6 +47,13 @@ impl IntoResponse for ApiError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server request failed".to_string(),
+                )
+            }
+            Self::Judge(error) => {
+                eprintln!("judge error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("judge failed: {error}"),
                 )
             }
         };
@@ -89,7 +98,15 @@ struct CreateUserRequest {
 struct CreateProblemRequest {
     problem_name: String,
     runtime_ms: i64,
-    memory_kb: i64,
+    memory_mb: i64,
+    problem_rating: i32
+}
+
+#[derive(Deserialize)]
+struct CreateTestCaseRequest {
+    problem_id: i64,
+    testcases: String,
+    solution: String
 }
 
 #[derive(Deserialize)]
@@ -165,7 +182,7 @@ async fn create_problem(
         ));
     }
 
-    if payload.runtime_ms <= 0 || payload.memory_kb <= 0 {
+    if payload.runtime_ms <= 0 || payload.memory_mb <= 0 {
         return Err(ApiError::BadRequest(
             "runtime_ms and memory_kb must be positive".to_string(),
         ));
@@ -175,11 +192,31 @@ async fn create_problem(
         &state.pool,
         payload.problem_name.trim(),
         payload.runtime_ms,
-        payload.memory_kb,
+        payload.memory_mb,
+        payload.problem_rating
     )
     .await?;
 
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn create_testcase(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateTestCaseRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    if payload.problem_id <= 0 {
+        return Err(ApiError::BadRequest("Problem id must be positive".to_string()));
+    }
+    if payload.solution.trim().is_empty() || payload.testcases.trim().is_empty() {
+        return Err(ApiError::BadRequest("Testcases and solutions must not be empty".to_string()));
+    }
+    let id = enyay::insert_testcase(
+        &state.pool,
+        payload.problem_id,
+        &payload.testcases, 
+        &payload.solution)
+        .await?;
+    Ok((StatusCode::CREATED,Json(IdResponse { id })))
 }
 
 async fn get_problem(
@@ -264,6 +301,22 @@ async fn get_recent_submissions(
     Ok(Json(enyay::get_recent_submissions(&state.pool, 20).await?))
 }
 
+async fn judge_submission(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let submission = enyay::get_submission(&state.pool, submission_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
+
+    let judge_volume = judge::JudgeVolume::new()?;
+    judge::judge_submission(&submission, &judge_volume, &state)
+        .await
+        .map_err(|error| ApiError::Judge(error.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn update_submission_verdict(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
@@ -295,7 +348,43 @@ fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
 // Main function
 
 #[tokio::main]
-async fn main() -> Result<(), ApiError> {
+async fn main() -> Result<(),ApiError>{
+    load_env();
+    let db_url = std::env::var("DB_URL").unwrap();
+
+    let pool = MySqlPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await?;
+    println!("connected to database");
+    //insert_problem(&pool, "Triple T", 1000, 64, 4000).await?;
+   /*let _ = insert_submission(&pool, 1, 1, Verdict::Pending, None, None, Some("c++20"), 
+    r#"
+    #include<iostream>
+    int main(){
+        int n; std::cin << n;
+        return 0;
+    }"#).await.expect("Failed to insert to db");*/
+
+    let judge_volume = judge::JudgeVolume::new().unwrap();
+    judge::cleanup_containers().await?;
+
+    let app_state = AppState {pool};
+
+    let test_subs: Json<Vec<enyay::Submission>> = get_recent_submissions(State(app_state.clone())).await.expect("Failed to retrieve submission");
+    let most_recent = &test_subs.0[0];
+
+    let result = judge::judge_submission(most_recent,&judge_volume,&app_state).await;
+    match result {
+        Ok(res) => {
+            println!("{}",res.verdict);
+            println!("{:?}",res.metrics);
+        }
+        Err(_) => println!("Could not complete request")
+    }
+    Ok(())
+}
+/*async fn main() -> Result<(), ApiError> {
     load_env();
 
     let db_url = std::env::var("DB_URL").unwrap();
@@ -319,6 +408,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
+        .route("/submissions/{submission_id}/judge", post(judge_submission))
         .route(
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
@@ -334,7 +424,7 @@ async fn main() -> Result<(), ApiError> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
+}*/
 
 fn load_env() {
     if dotenvy::dotenv().is_err() {

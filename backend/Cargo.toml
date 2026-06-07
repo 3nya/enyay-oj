@@ -7,5 +7,8 @@ edition = "2024"
 axum = "0.8.4"
 dotenvy = "0.15.7"
 serde = { version = "1.0.219", features = ["derive"] }
-sqlx = { version ="0.8.6", features = ["mysql", "runtime-tokio", "macros", "time"] }
+sqlx = { version ="0.8.6", features = ["mysql", "runtime-tokio", "macros", "time", "tls-rustls"] }
 tokio = { version = "1.52.3", features = ["full"]}
+dotenv = "0.15.0"
+uuid = { version = "1.23.1", features = ["v7"] }
+chrono = { version = "0.4", features = ["serde"] }

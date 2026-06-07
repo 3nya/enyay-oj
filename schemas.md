@@ -11,9 +11,20 @@ located at `localhost:8080`, login with user `root` and password.
 ```sql
 CREATE TABLE problems (
     problem_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    problem_rating INT,
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
-    memory_kb BIGINT
+    memory_mb BIGINT
+);
+```
+### testcases
+```sql
+CREATE TABLE testcases (
+    test_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    problem_id BIGINT NOT NULL,
+    input TEXT NOT NULL,
+    solution TEXT NOT NULL,
+    FOREIGN KEY (problem_id) REFERENCES problems(problem_id)
 );
 ```
 
@@ -28,22 +39,18 @@ CREATE TABLE submissions (
     verdict VARCHAR(50) NOT NULL,
     runtime_ms BIGINT,
     memory_kb BIGINT,
-
-    language VARCHAR(50),
-
+    
     source_code TEXT NOT NULL,
+    language VARCHAR(255),
 
-    submitted_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (problem_id) REFERENCES problems(problem_id)
+    submitted_time TIMESTAMP
 );
 ```
 
 ### users
 ```sql
 CREATE TABLE users (
-    user_id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_name VARCHAR(255) NOT NULL
+    user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_name VARCHAR(255) UNIQUE NOT NULL
 );
 ```
