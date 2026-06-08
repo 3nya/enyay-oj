@@ -4,6 +4,9 @@ const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
 const state = {
   problems: [],
   submissions: [],
+  authReady: false,
+  authError: null,
+  currentUser: null,
 };
 
 const problemsPerPage = 10;
@@ -56,6 +59,44 @@ function setActiveNav(route) {
 function navigate(path) {
   history.pushState({}, "", path);
   render();
+}
+
+function firebaseConfigReady() {
+  const config = window.ENYAY_FIREBASE_CONFIG || {};
+  return Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
+}
+
+function initFirebaseAuth() {
+  if (!window.firebase) {
+    state.authReady = true;
+    state.authError = "Firebase scripts did not load. Check your network connection.";
+    return;
+  }
+
+  if (!firebaseConfigReady()) {
+    state.authReady = true;
+    state.authError = "Firebase config is missing. Fill in ENYAY_FIREBASE_CONFIG in index.html.";
+    return;
+  }
+
+  try {
+    if (!firebase.apps.length) {
+      firebase.initializeApp(window.ENYAY_FIREBASE_CONFIG);
+    }
+
+    firebase.auth().onAuthStateChanged((user) => {
+      state.authReady = true;
+      state.authError = null;
+      state.currentUser = user;
+
+      if (window.location.pathname === "/login") {
+        render();
+      }
+    });
+  } catch (error) {
+    state.authReady = true;
+    state.authError = error.message;
+  }
 }
 
 async function loadProblems() {
@@ -396,6 +437,100 @@ function renderPlaceholder(title, body) {
   `;
 }
 
+function renderLogin() {
+  const user = state.currentUser;
+  const displayName = user?.displayName || user?.email || "signed-in user";
+  const photoUrl = user?.photoURL;
+
+  app.innerHTML = `
+    <section class="login-layout">
+      <div class="panel login-panel">
+        <div class="panel-header">
+          <h1 class="panel-title">login</h1>
+          <a class="button secondary" href="/" data-link>home</a>
+        </div>
+        <div class="login-body">
+          ${
+            state.authError
+              ? `<p class="status error">${escapeHtml(state.authError)}</p>`
+              : user
+                ? `
+                  <div class="account-row">
+                    ${
+                      photoUrl
+                        ? `<img class="avatar" src="${escapeHtml(photoUrl)}" alt="">`
+                        : `<div class="avatar fallback" aria-hidden="true">${escapeHtml(displayName.charAt(0).toUpperCase())}</div>`
+                    }
+                    <div>
+                      <p class="account-name">${escapeHtml(displayName)}</p>
+                      <p class="account-email">${escapeHtml(user.email || "")}</p>
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <button class="button secondary" id="copy-token" type="button">copy id token</button>
+                    <button class="button" id="sign-out" type="button">sign out</button>
+                  </div>
+                  <p class="status" id="auth-status">signed in with Google</p>
+                `
+                : `
+                  <p class="login-copy">Use your Google account to submit solutions and track judge usage.</p>
+                  <button class="google-button" id="google-login" type="button" ${state.authReady ? "" : "disabled"}>
+                    <span class="google-mark" aria-hidden="true">G</span>
+                    <span>continue with Google</span>
+                  </button>
+                  <p class="status" id="auth-status">${state.authReady ? "not signed in" : "loading auth"}</p>
+                `
+          }
+        </div>
+      </div>
+    </section>
+  `;
+
+  document.querySelector("#google-login")?.addEventListener("click", signInWithGoogle);
+  document.querySelector("#sign-out")?.addEventListener("click", signOut);
+  document.querySelector("#copy-token")?.addEventListener("click", copyIdToken);
+}
+
+async function signInWithGoogle() {
+  const status = document.querySelector("#auth-status");
+
+  try {
+    status.textContent = "opening Google sign-in";
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    await firebase.auth().signInWithPopup(provider);
+  } catch (error) {
+    status.className = "status error";
+    status.textContent = error.message;
+  }
+}
+
+async function signOut() {
+  const status = document.querySelector("#auth-status");
+
+  try {
+    status.textContent = "signing out";
+    await firebase.auth().signOut();
+  } catch (error) {
+    status.className = "status error";
+    status.textContent = error.message;
+  }
+}
+
+async function copyIdToken() {
+  const status = document.querySelector("#auth-status");
+
+  try {
+    const token = await state.currentUser.getIdToken();
+    await navigator.clipboard.writeText(token);
+    status.className = "status";
+    status.textContent = "id token copied";
+  } catch (error) {
+    status.className = "status error";
+    status.textContent = error.message;
+  }
+}
+
 async function render() {
   const route = window.location.pathname;
   setActiveNav(route);
@@ -411,6 +546,8 @@ async function render() {
       await renderSubmit(route.split("/")[2]);
     } else if (route === "/users-page") {
       renderPlaceholder("users", "User browsing is not wired yet.");
+    } else if (route === "/login") {
+      renderLogin();
     } else if (route === "/about") {
       renderPlaceholder("about", "Enyay OJ is a local online judge for testing submitted solutions.");
     } else {
@@ -439,4 +576,5 @@ document.addEventListener("click", (event) => {
 });
 
 window.addEventListener("popstate", render);
+initFirebaseAuth();
 render();

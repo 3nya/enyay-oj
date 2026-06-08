@@ -412,6 +412,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/submit", get(frontend_index))
         .route("/submit/{problem_id}", get(frontend_index))
         .route("/users-page", get(frontend_index))
+        .route("/login", get(frontend_index))
         .route("/about", get(frontend_index))
         .route("/styles.css", get(frontend_styles))
         .route("/app.js", get(frontend_script))

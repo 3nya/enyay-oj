@@ -367,6 +367,97 @@ textarea {
   text-decoration: underline;
 }
 
+.login-layout {
+  display: grid;
+  justify-content: center;
+}
+
+.login-panel {
+  width: min(100%, 480px);
+}
+
+.login-body {
+  display: grid;
+  gap: 16px;
+  padding: 18px 14px;
+}
+
+.login-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.google-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.google-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.google-mark {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--accent-dark);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.account-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.avatar {
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatar.fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tab);
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.account-name,
+.account-email {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-name {
+  font-size: 22px;
+}
+
+.account-email {
+  color: var(--muted);
+  font-size: 16px;
+}
+
 @media (max-width: 760px) {
   .page-shell {
     width: min(100vw, 640px);
