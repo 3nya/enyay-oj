@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::{Verdict};
+use crate::{enyay::Verdict};
 
 #[derive(Clone)]
 struct AppState {
@@ -92,6 +92,7 @@ struct HealthResponse {
 #[derive(Deserialize)]
 struct CreateUserRequest {
     user_name: String,
+    auth_uid: String,
 }
 
 #[derive(Deserialize)]
@@ -197,18 +198,59 @@ async fn get_user_by_name(
     Ok(Json(user))
 }
 
+async fn get_user_by_uid(
+    State(state): State<AppState>,
+    Path(auth_uid): Path<String>,
+) -> Result<Json<enyay::User>, ApiError> {
+    let user = enyay::get_user_by_uid(&state.pool, &auth_uid)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("uid not found".to_string()))?;
+    Ok(Json(user))
+}
+
 async fn create_user(
     State(state): State<AppState>,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
-    if payload.user_name.trim().is_empty() {
+    let username = payload.user_name.trim();
+    if username.is_empty() {
         return Err(ApiError::BadRequest(
             "user_name cannot be empty".to_string(),
         ));
     }
-
-    let id = enyay::insert_user(&state.pool, payload.user_name.trim()).await?;
+    validate_username(username)?;
+    if payload.auth_uid.is_empty() {
+        return Err(ApiError::BadRequest(
+            "uid cannot be empty".to_string(),
+        ))
+    }
+    let id = enyay::insert_user(&state.pool, username, &payload.auth_uid).await?;
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+fn validate_username(username:&str) -> Result<(),ApiError>{
+    if username.len() < 3 || username.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "usernames must be between 3-20 characters".to_string(),
+        ));
+    }
+
+    if !username.chars().next().is_some_and(|c| c.is_ascii_alphabetic()){
+        return Err(ApiError::BadRequest(
+            "usernames must start with a letter".to_string(),
+        ));
+    }
+    if username.chars().next_back().is_some_and(|c| c == '_') {
+        return Err(ApiError::BadRequest(
+            "usernames cannot have trailing underscores".to_string(),
+        ));
+    }
+    if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ApiError::BadRequest(
+            "usernames may only contain letters, numbers and underscores".to_string()
+        ));
+    }
+    Ok(())
 }
 
 async fn create_problem(
@@ -413,6 +455,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/submit/{problem_id}", get(frontend_index))
         .route("/users-page", get(frontend_index))
         .route("/login", get(frontend_index))
+        .route("/login/users", get(frontend_index))
         .route("/about", get(frontend_index))
         .route("/styles.css", get(frontend_styles))
         .route("/app.js", get(frontend_script))
@@ -422,6 +465,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/health", get(health))
         .route("/users", get(get_users).post(create_user))
         .route("/users/by-name/{user_name}", get(get_user_by_name))
+        .route("/users/by-uid/{uid}", get(get_user_by_uid))
         .route("/users/{user_id}", get(get_user))
         .route("/problems", post(create_problem))
         .route("/problems/all", get(get_recent_problems))

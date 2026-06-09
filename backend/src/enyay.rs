@@ -7,6 +7,7 @@ use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
 pub struct User {
     pub user_id: i64,
     pub user_name: String,
+    pub auth_uid: String
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -174,7 +175,7 @@ impl FromStr for Language{
 pub async fn get_users(pool: &MySqlPool) -> Result<Vec<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT user_id, user_name
+        SELECT user_id, user_name, auth_uid
         FROM users
         ORDER BY user_id
         "#,
@@ -186,7 +187,7 @@ pub async fn get_users(pool: &MySqlPool) -> Result<Vec<User>, sqlx::Error> {
 pub async fn get_user(pool: &MySqlPool, user_id: i64) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT user_id, user_name
+        SELECT user_id, user_name, auth_uid
         FROM users
         WHERE user_id = ?
         "#,
@@ -202,7 +203,7 @@ pub async fn get_user_by_name(
 ) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT user_id, user_name
+        SELECT user_id, user_name, auth_uid
         FROM users
         WHERE user_name = ?
         "#,
@@ -212,14 +213,31 @@ pub async fn get_user_by_name(
     .await
 }
 
-pub async fn insert_user(pool: &MySqlPool, user_name: &str) -> Result<i64, sqlx::Error> {
+pub async fn get_user_by_uid(
+    pool: &MySqlPool,
+    auth_uid: &str,
+) -> Result<Option<User>,sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        r#"
+        SELECT user_id, user_name, auth_uid
+        FROM users
+        WHERE auth_uid = ?
+        "#,
+    )
+    .bind(auth_uid)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn insert_user(pool: &MySqlPool, user_name: &str, auth_uid:&str) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO users (user_name)
-        VALUES (?)
+        INSERT INTO users (user_name, auth_uid)
+        VALUES (?, ?)
         "#,
     )
     .bind(user_name)
+    .bind(auth_uid)
     .execute(pool)
     .await?;
 
