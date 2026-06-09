@@ -82,6 +82,24 @@ a {
   white-space: nowrap;
 }
 
+.input-fields{
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 20px;
+}
+
+.input-field{
+  min-height: 25px;
+  min-width: 50px;
+  max-width: 200px;
+  height: 20px;
+  padding: 4px;
+  font-size: 15px;
+  line-height: 1.45;
+  resize: none;
+}
+
 .nav-tabs a {
   display: inline-flex;
   min-height: 30px;
@@ -143,6 +161,11 @@ a {
   border: 2px solid var(--line);
   border-radius: 8px;
   background: var(--paper);
+}
+
+.panel-username{
+  width: min(100%,400px);
+  margin: 0 auto;
 }
 
 .panel-header {

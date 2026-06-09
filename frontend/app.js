@@ -437,11 +437,104 @@ function renderPlaceholder(title, body) {
   `;
 }
 
-function renderLogin() {
+async function renderCreateUser(){
+  if(!state.currentUser){
+    navigate('/login');
+    return;
+  }
+
+  const existing = await uidExists(state.currentUser.uid)
+  if(existing){
+    navigate(`/login`);
+    return;
+  }
+
+  app.innerHTML = `
+      <section class="panel panel-username">
+      <div class="panel-header">
+        <h1 class="panel-title">Create Username</h1>
+      </div>
+      <form id = "create-user-form" class="input-fields">
+        <label for="username-input">Username:</label>
+        <input id="username-input" class= "input-field" name="username" spellcheck="false" required>
+        <div style="padding: 14px 0px;">
+          <button class="button" type="submit">create</button>
+        </div>
+        <p class="status" id="create-user-status"></p>
+      </form>
+    </section>
+  `;
+  document.querySelector("#create-user-form").addEventListener("submit",createUser);
+}
+
+async function createUser(event){
+  event.preventDefault();
+  let form = event.currentTarget
+  const button = form.querySelector("button[type='submit']");
+  const status= document.querySelector("#create-user-status");
+  const data = new FormData(form);
+  const username = data.get("username").trim();
+  
+  button.disabled = true;
+  status.textContent = "checking username";
+
+  try{
+    const userExists = await usernameExists(username);
+    if(userExists){
+      status.textContent = "username already exists";
+      return;
+    }
+
+    await api("/users", {
+      method: "POST",
+      body: JSON.stringify({
+        user_name: username,
+        auth_uid: state.currentUser.uid,
+      }),
+    });
+    navigate(`/login`);
+  } catch(error){
+    status.textContent = error.message;
+  } finally{
+    button.disabled = false;
+  }
+}
+
+async function usernameExists(username){
+  try{
+    await api(`/users/by-name/${encodeURIComponent(username)}`)
+    return true;
+  } catch(error){
+    if(error.message.includes("not found")){
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function uidExists(uid){
+  try{
+    await api(`/users/by-uid/${encodeURIComponent(uid)}`)
+    return true;
+  } catch(error){
+    if(error.message.includes("not found")){
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function renderLogin() {
   const user = state.currentUser;
+  if (user){
+    const existing = await uidExists(user.uid);
+    if(!existing){
+      navigate('/login/users')
+      return;
+    }
+  } 
   const displayName = user?.displayName || user?.email || "signed-in user";
   const photoUrl = user?.photoURL;
-
   app.innerHTML = `
     <section class="login-layout">
       <div class="panel login-panel">
@@ -485,7 +578,6 @@ function renderLogin() {
       </div>
     </section>
   `;
-
   document.querySelector("#google-login")?.addEventListener("click", signInWithGoogle);
   document.querySelector("#sign-out")?.addEventListener("click", signOut);
   document.querySelector("#copy-token")?.addEventListener("click", copyIdToken);
@@ -547,7 +639,9 @@ async function render() {
     } else if (route === "/users-page") {
       renderPlaceholder("users", "User browsing is not wired yet.");
     } else if (route === "/login") {
-      renderLogin();
+      await renderLogin();
+    } else if (route === "/login/users"){
+      await renderCreateUser();
     } else if (route === "/about") {
       renderPlaceholder("about", "Enyay OJ is a local online judge for testing submitted solutions.");
     } else {
