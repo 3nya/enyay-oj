@@ -294,10 +294,6 @@ async function renderSubmit(problemId) {
               </select>
             </div>
             <div class="field">
-              <label for="user-id">user id</label>
-              <input id="user-id" name="user_id" type="number" min="1" value="1" required>
-            </div>
-            <div class="field">
               <label for="language">language</label>
               <select id="language" name="language">
                 <option value="c++20">c++20</option>
@@ -383,11 +379,16 @@ function enableTabs(textarea) {
 }
 
 async function submitSolution(event) {
+  const status = document.querySelector("#submit-status");
   event.preventDefault();
+  if(!state.currentUser){
+    status.textContent = "Please login";
+    status.className = "status error"
+    return;
+  }
 
   const form = event.currentTarget;
   const button = form.querySelector("button[type='submit']");
-  const status = document.querySelector("#submit-status");
   const runJudge = document.querySelector("#run-judge").checked;
   const data = new FormData(form);
 
@@ -396,10 +397,11 @@ async function submitSolution(event) {
   status.textContent = "creating submission";
 
   try {
+    const user = await api(`/users/by-uid/${encodeURIComponent(state.currentUser.uid)}`);
     const submission = await api("/submissions", {
       method: "POST",
       body: JSON.stringify({
-        user_id: Number(data.get("user_id")),
+        user_id: user.user_id,
         problem_id: Number(data.get("problem_id")),
         verdict: "PENDING",
         runtime_ms: null,
@@ -476,12 +478,14 @@ async function createUser(event){
   const username = data.get("username").trim();
   
   button.disabled = true;
+  status.className = "status"
   status.textContent = "checking username";
 
   try{
     const userExists = await usernameExists(username);
     if(userExists){
       status.textContent = "username already exists";
+      status.className = "status error"
       return;
     }
 
@@ -495,6 +499,7 @@ async function createUser(event){
     navigate(`/login`);
   } catch(error){
     status.textContent = error.message;
+    status.className = "status error"
   } finally{
     button.disabled = false;
   }
