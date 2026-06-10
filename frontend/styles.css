@@ -287,10 +287,24 @@ textarea {
   resize: vertical;
 }
 
-.submit-layout {
+.submit-layout,
+.problem-layout{
   display: grid;
   grid-template-columns: minmax(0, 1fr) 290px;
   gap: 18px;
+}
+
+.center-actions{
+  padding-top: 25px;
+  justify-content: center;
+}
+
+.preformatted{
+  white-space: pre-wrap;
+}
+
+.problem-layout{
+  align-items: start;
 }
 
 .problem-summary {

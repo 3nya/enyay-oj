@@ -338,7 +338,21 @@ pub async fn get_test_cases(
     .await
 }
 
-
+pub async fn get_example_test(
+    pool: &MySqlPool,
+    problem_id: i64
+) -> Result<Option<TestCase>, sqlx::Error>{
+        sqlx::query_as::<_, TestCase>(
+        r#"
+        SELECT problem_id, input, solution
+        FROM testcases 
+        WHERE problem_id = ? LIMIT 1
+        "#,
+    )
+    .bind(problem_id)
+    .fetch_optional(pool)
+    .await
+}
 
 pub async fn insert_submission(
     pool: &MySqlPool,

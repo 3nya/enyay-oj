@@ -222,7 +222,7 @@ async function renderProblemset() {
                   .map(
                     (problem) => `
                       <tr>
-                        <td><a href="/submit/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a></td>
+                        <td><a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a></td>
                         <td>${escapeHtml(problem.runtime_ms)} ms</td>
                         <td>${escapeHtml(problem.memory_mb)} MB</td>
                         <td>${escapeHtml(problem.problem_rating)}</td>
@@ -242,6 +242,105 @@ async function renderProblemset() {
       <a class="button secondary ${currentPage === totalPages ? "disabled" : ""}" href="/problemset?page=${nextPage}" data-link>next</a>
     </div>
   `;
+}
+
+async function renderProblem(problemId){
+  renderLoading("loading problem")
+  const problem = await findProblem(problemId);
+  const example = await findExample(problemId);
+
+    app.innerHTML = `
+    <section class="problem-layout">
+      <div class="panel">
+        <div class="panel-header">
+          <h1 class="panel-title">${escapeHtml(problem.problem_name)}</h1>
+          <a class="button secondary" href="/problemset" data-link>problemset</a>
+        </div>
+        <div class="problem-summary">
+            <p class="preformatted">${escapeHtml(problem.problem_statement)}</p>
+            ${
+              example 
+              ? `<h1 class="panel-title">Example</h1>
+            <br>
+            <div class="panel">
+              <div class="panel-header">
+                <h1 class="panel-title">Input</h1>
+                 <button class="button secondary" id="copy-input" type="button">copy</button>
+              </div>
+              <div class="problem-summary">
+                <p class="preformatted">${escapeHtml(example.input)}</p>
+              </div>
+            </div>
+            <br>
+            <div class="panel">
+              <div class="panel-header">
+                <h1 class="panel-title">Output</h1>
+                <button class="button secondary" id="copy-output" type="button">copy</button>
+              </div>
+              <div class="problem-summary">
+                <p class="preformatted">${escapeHtml(example.solution)}</p>
+              </div>
+            </div>` : ""
+            }
+          </div>
+          <div class="status" id="submit-status" role="status"></div>
+        </div>
+      </div>
+
+      <aside class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">problem</h2>
+        </div>
+        <div class="problem-summary">
+          <dl>
+            <dt>name</dt>
+            <dd>${escapeHtml(problem.problem_name)}</dd>
+            <dt>runtime</dt>
+            <dd>${escapeHtml(problem.runtime_ms)} ms</dd>
+            <dt>memory</dt>
+            <dd>${escapeHtml(problem.memory_mb)} MB</dd>
+            <dt>rating</dt>
+            <dd>${escapeHtml(problem.problem_rating)}</dd>
+          </dl>
+          <div class = "actions center-actions">
+            <a class="button" href="/submit/${problem.problem_id}" data-link>submit</a>
+          </div>
+        </div>
+      </aside>
+    </section>
+  `;
+  if(example){
+    document.querySelector("#copy-input")?.addEventListener("click", () => copyToBoard(example.input, "copy-input"));
+    document.querySelector("#copy-output")?.addEventListener("click", () => copyToBoard(example.solution, "copy-output"));
+  }
+}
+
+async function copyToBoard(value, buttonId) {
+  const button = document.querySelector(`#${buttonId}`);
+  if(!button) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    button.textContent = "copied"
+    setTimeout(() =>{
+      button.textContent = "copy"
+    }, 1200);
+  } catch (error) {
+    button.textContent = "failed"
+    setTimeout(() =>{
+      button.textContent = "copy"
+    },1200);
+    return;
+  }
+}
+
+async function findExample(problemId) {
+  if(problemId) {
+    try{
+      return await api(`/problems/${problemId}/example`);
+    } catch {
+      return null;
+    }
+  }
 }
 
 async function findProblem(problemId) {
@@ -637,6 +736,8 @@ async function render() {
       await renderHome();
     } else if (route === "/problemset") {
       await renderProblemset();
+    } else if(route.startsWith("/problemset/problem/")){
+      await renderProblem(route.split("/")[3]);
     } else if (route === "/submit") {
       await renderSubmit(null);
     } else if (route.startsWith("/submit/")) {

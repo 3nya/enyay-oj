@@ -172,6 +172,16 @@ async fn frontend_favicon() -> impl IntoResponse {
     )
 }
 
+async fn get_example_test(
+    State(state) : State<AppState>,
+    Path(problem_id):Path<i64>
+) -> Result<Json<enyay::TestCase>, ApiError> {
+    let example = enyay::get_example_test(&state.pool, problem_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("No Example Testcase found".to_string()))?;
+    Ok(Json(example))
+}
+
 async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<enyay::User>>, ApiError> {
     Ok(Json(enyay::get_users(&state.pool).await?))
 }
@@ -451,6 +461,7 @@ async fn main() -> Result<(), ApiError> {
     let app = Router::new()
         .route("/", get(frontend_index))
         .route("/problemset", get(frontend_index))
+        .route("/problemset/problem/{problem_id}", get(frontend_index))
         .route("/submit", get(frontend_index))
         .route("/submit/{problem_id}", get(frontend_index))
         .route("/users-page", get(frontend_index))
@@ -470,6 +481,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/problems", post(create_problem))
         .route("/problems/all", get(get_recent_problems))
         .route("/problems/{problem_id}", get(get_problem))
+        .route("/problems/{problem_id}/example",get(get_example_test))
         .route("/problems/{problem_id}/testcases", post(create_testcase))
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
