@@ -301,6 +301,7 @@ textarea {
 
 .preformatted{
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .problem-layout{
@@ -520,6 +521,7 @@ textarea {
 
   .home-grid,
   .submit-layout,
+  .problem-layout,
   .form-grid {
     grid-template-columns: 1fr;
   }
