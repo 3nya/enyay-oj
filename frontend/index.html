@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Enyay OJ</title>
+    <link rel="icon" href="/assets/favicon.ico">
+    <link rel="stylesheet" href="/styles.css">
+    <link type="text/css" rel="stylesheet" href="https://www.gstatic.com/firebasejs/ui/6.0.1/firebase-ui-auth.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <a class="brand" href="/" data-link aria-label="Enyay OJ home">
+          <img src="/assets/enyayoj-logo.png" alt="Enyay OJ">
+        </a>
+        <nav class="nav-tabs" aria-label="Primary">
+          <a href="/" data-link data-nav="home">home</a>
+          <a href="/problemset" data-link data-nav="problemset">problemset</a>
+          <a href="/submit" data-link data-nav="submit">submit</a>
+          <a href="/status" data-link data-nav="status">status</a>
+          <a href="/login" data-link data-nav="login">login</a>
+          <a href="/about" data-link data-nav="about">about</a>
+        </nav>
+      </header>
+
+      <main id="app" class="app-view" tabindex="-1"></main>
+    </div>
+
+    <script>
+      window.ENYAY_FIREBASE_CONFIG = {
+        apiKey: "AIzaSyAW6whcV58C53j21xPaFjDYcmtOFHrdmOI",
+        authDomain: "enyay-oj.firebaseapp.com",
+        projectId: "enyay-oj",
+        storageBucket: "enyay-oj.firebasestorage.app",
+        messagingSenderId: "944522680420",
+        appId: "1:944522680420:web:d53c00550378800e15e771",
+        measurementId: "G-179ZTBVF62"
+      };
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/ui/6.0.1/firebase-ui-auth.js"></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

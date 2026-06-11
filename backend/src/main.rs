@@ -6,15 +6,15 @@ use std::{net::SocketAddr, str::FromStr};
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
+    http::{StatusCode, header},
+    response::{Html, IntoResponse, Response},
     routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::net::TcpListener;
 
-use crate::enyay::{Verdict};
+use crate::{enyay::Verdict};
 
 #[derive(Clone)]
 struct AppState {
@@ -92,6 +92,7 @@ struct HealthResponse {
 #[derive(Deserialize)]
 struct CreateUserRequest {
     user_name: String,
+    auth_uid: String,
 }
 
 #[derive(Deserialize)]
@@ -99,12 +100,12 @@ struct CreateProblemRequest {
     problem_name: String,
     runtime_ms: i64,
     memory_mb: i64,
-    problem_rating: i32
+    problem_rating: i32,
+    problem_statement: String
 }
 
 #[derive(Deserialize)]
 struct CreateTestCaseRequest {
-    problem_id: i64,
     testcases: String,
     solution: String
 }
@@ -130,6 +131,55 @@ struct UpdateVerdictRequest {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn frontend_index() -> Html<&'static str> {
+    Html(include_str!("../../frontend/index.html"))
+}
+
+async fn frontend_styles() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../../frontend/styles.css"),
+    )
+}
+
+async fn frontend_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../../frontend/app.js"),
+    )
+}
+
+async fn frontend_logo() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../frontend/assets/enyayoj-logo.png").as_slice(),
+    )
+}
+
+async fn frontend_mascot() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../frontend/assets/enyayoj-mascot.png").as_slice(),
+    )
+}
+
+async fn frontend_favicon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/x-icon")],
+        include_bytes!("../../frontend/assets/favicon.ico").as_slice(),
+    )
+}
+
+async fn get_example_test(
+    State(state) : State<AppState>,
+    Path(problem_id):Path<i64>
+) -> Result<Json<enyay::TestCase>, ApiError> {
+    let example = enyay::get_example_test(&state.pool, problem_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("No Example Testcase found".to_string()))?;
+    Ok(Json(example))
 }
 
 async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<enyay::User>>, ApiError> {
@@ -158,18 +208,59 @@ async fn get_user_by_name(
     Ok(Json(user))
 }
 
+async fn get_user_by_uid(
+    State(state): State<AppState>,
+    Path(auth_uid): Path<String>,
+) -> Result<Json<enyay::User>, ApiError> {
+    let user = enyay::get_user_by_uid(&state.pool, &auth_uid)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("uid not found".to_string()))?;
+    Ok(Json(user))
+}
+
 async fn create_user(
     State(state): State<AppState>,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
-    if payload.user_name.trim().is_empty() {
+    let username = payload.user_name.trim();
+    if username.is_empty() {
         return Err(ApiError::BadRequest(
             "user_name cannot be empty".to_string(),
         ));
     }
-
-    let id = enyay::insert_user(&state.pool, payload.user_name.trim()).await?;
+    validate_username(username)?;
+    if payload.auth_uid.is_empty() {
+        return Err(ApiError::BadRequest(
+            "uid cannot be empty".to_string(),
+        ))
+    }
+    let id = enyay::insert_user(&state.pool, username, &payload.auth_uid).await?;
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+fn validate_username(username:&str) -> Result<(),ApiError>{
+    if username.len() < 3 || username.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "usernames must be between 3-20 characters".to_string(),
+        ));
+    }
+
+    if !username.chars().next().is_some_and(|c| c.is_ascii_alphabetic()){
+        return Err(ApiError::BadRequest(
+            "usernames must start with a letter".to_string(),
+        ));
+    }
+    if username.chars().next_back().is_some_and(|c| c == '_') {
+        return Err(ApiError::BadRequest(
+            "usernames cannot have trailing underscores".to_string(),
+        ));
+    }
+    if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ApiError::BadRequest(
+            "usernames may only contain letters, numbers and underscores".to_string()
+        ));
+    }
+    Ok(())
 }
 
 async fn create_problem(
@@ -179,6 +270,12 @@ async fn create_problem(
     if payload.problem_name.trim().is_empty() {
         return Err(ApiError::BadRequest(
             "problem_name cannot be empty".to_string(),
+        ));
+    }
+
+    if payload.problem_statement.is_empty() {
+        return Err(ApiError::BadRequest(
+            "problem statement cannot be empty".to_string()
         ));
     }
 
@@ -193,7 +290,8 @@ async fn create_problem(
         payload.problem_name.trim(),
         payload.runtime_ms,
         payload.memory_mb,
-        payload.problem_rating
+        payload.problem_rating,
+        &payload.problem_statement
     )
     .await?;
 
@@ -202,9 +300,10 @@ async fn create_problem(
 
 async fn create_testcase(
     State(state): State<AppState>,
+    Path(problem_id): Path<i64>,
     Json(payload): Json<CreateTestCaseRequest>
 ) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
-    if payload.problem_id <= 0 {
+    if problem_id <= 0 {
         return Err(ApiError::BadRequest("Problem id must be positive".to_string()));
     }
     if payload.solution.trim().is_empty() || payload.testcases.trim().is_empty() {
@@ -212,7 +311,7 @@ async fn create_testcase(
     }
     let id = enyay::insert_testcase(
         &state.pool,
-        payload.problem_id,
+        problem_id,
         &payload.testcases, 
         &payload.solution)
         .await?;
@@ -297,8 +396,15 @@ async fn get_submission(
 
 async fn get_recent_submissions(
     State(state): State<AppState>,
-) -> Result<Json<Vec<enyay::Submission>>, ApiError> {
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
     Ok(Json(enyay::get_recent_submissions(&state.pool, 20).await?))
+}
+
+async  fn get_recent_submissions_by_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
+    Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
 }
 
 async fn judge_submission(
@@ -345,8 +451,6 @@ fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
     Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
 }
 
-// Main function
-
 #[tokio::main]
 async fn main() -> Result<(), ApiError> {
     load_env();
@@ -362,18 +466,36 @@ async fn main() -> Result<(), ApiError> {
     println!("connected to database");
     judge::cleanup_containers().await?;
     let app = Router::new()
+        .route("/", get(frontend_index))
+        .route("/problemset", get(frontend_index))
+        .route("/problemset/problem/{problem_id}", get(frontend_index))
+        .route("/submit", get(frontend_index))
+        .route("/submit/{problem_id}", get(frontend_index))
+        .route("/status", get(frontend_index))
+        .route("/status/my",get(frontend_index))
+        .route("/login", get(frontend_index))
+        .route("/login/users", get(frontend_index))
+        .route("/about", get(frontend_index))
+        .route("/styles.css", get(frontend_styles))
+        .route("/app.js", get(frontend_script))
+        .route("/assets/enyayoj-logo.png", get(frontend_logo))
+        .route("/assets/enyayoj-mascot.png", get(frontend_mascot))
+        .route("/assets/favicon.ico", get(frontend_favicon))
         .route("/health", get(health))
         .route("/users", get(get_users).post(create_user))
         .route("/users/by-name/{user_name}", get(get_user_by_name))
+        .route("/users/by-uid/{uid}", get(get_user_by_uid))
         .route("/users/{user_id}", get(get_user))
         .route("/problems", post(create_problem))
         .route("/problems/all", get(get_recent_problems))
         .route("/problems/{problem_id}", get(get_problem))
+        .route("/problems/{problem_id}/example",get(get_example_test))
         .route("/problems/{problem_id}/testcases", post(create_testcase))
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
         .route("/submissions/{submission_id}/judge", post(judge_submission))
+        .route("/submissions/recent/{user_id}", get(get_recent_submissions_by_user))
         .route(
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),

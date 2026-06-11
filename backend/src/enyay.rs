@@ -7,6 +7,7 @@ use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
 pub struct User {
     pub user_id: i64,
     pub user_name: String,
+    pub auth_uid: String
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -15,7 +16,8 @@ pub struct Problem {
     pub problem_name: String,
     pub runtime_ms: i64,
     pub memory_mb: i64,
-    pub problem_rating: i32
+    pub problem_rating: i32,
+    pub problem_statement: String
 }
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct TestCase {
@@ -34,6 +36,18 @@ pub struct Submission {
     pub memory_kb: Option<i64>,
     pub language: Option<String>,
     pub source_code: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct SubmissionStatus{
+    pub submission_id: i64,
+    pub user_id: i64,
+    pub user_name: String,
+    pub problem_id: i64,
+    pub verdict: String,
+    pub runtime_ms: Option<i64>,
+    pub memory_kb: Option<i64>,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,7 +187,7 @@ impl FromStr for Language{
 pub async fn get_users(pool: &MySqlPool) -> Result<Vec<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT user_id, user_name
+        SELECT user_id, user_name, auth_uid
         FROM users
         ORDER BY user_id
         "#,
@@ -185,7 +199,7 @@ pub async fn get_users(pool: &MySqlPool) -> Result<Vec<User>, sqlx::Error> {
 pub async fn get_user(pool: &MySqlPool, user_id: i64) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT user_id, user_name
+        SELECT user_id, user_name, auth_uid
         FROM users
         WHERE user_id = ?
         "#,
@@ -201,7 +215,7 @@ pub async fn get_user_by_name(
 ) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as::<_, User>(
         r#"
-        SELECT user_id, user_name
+        SELECT user_id, user_name, auth_uid
         FROM users
         WHERE user_name = ?
         "#,
@@ -211,14 +225,31 @@ pub async fn get_user_by_name(
     .await
 }
 
-pub async fn insert_user(pool: &MySqlPool, user_name: &str) -> Result<i64, sqlx::Error> {
+pub async fn get_user_by_uid(
+    pool: &MySqlPool,
+    auth_uid: &str,
+) -> Result<Option<User>,sqlx::Error> {
+    sqlx::query_as::<_, User>(
+        r#"
+        SELECT user_id, user_name, auth_uid
+        FROM users
+        WHERE auth_uid = ?
+        "#,
+    )
+    .bind(auth_uid)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn insert_user(pool: &MySqlPool, user_name: &str, auth_uid:&str) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO users (user_name)
-        VALUES (?)
+        INSERT INTO users (user_name, auth_uid)
+        VALUES (?, ?)
         "#,
     )
     .bind(user_name)
+    .bind(auth_uid)
     .execute(pool)
     .await?;
 
@@ -230,18 +261,20 @@ pub async fn insert_problem(
     problem_name: &str,
     runtime_ms: i64,
     memory_mb: i64,
-    problem_rating: i32
+    problem_rating: i32,
+    problem_statement: &str
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating, problem_statement)
+        VALUES (?, ?, ?, ?, ?)
         "#,
     )
     .bind(problem_name)
     .bind(runtime_ms)
     .bind(memory_mb)
     .bind(problem_rating)
+    .bind(problem_statement)
     .execute(pool)
     .await?;
 
@@ -254,7 +287,7 @@ pub async fn get_problem(
 ) -> Result<Option<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement
         FROM problems
         WHERE problem_id = ?
         "#,
@@ -270,7 +303,7 @@ pub async fn get_recent_problems(
 ) -> Result<Vec<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement
         FROM problems
         ORDER BY problem_id ASC
         LIMIT ?
@@ -317,7 +350,21 @@ pub async fn get_test_cases(
     .await
 }
 
-
+pub async fn get_example_test(
+    pool: &MySqlPool,
+    problem_id: i64
+) -> Result<Option<TestCase>, sqlx::Error>{
+        sqlx::query_as::<_, TestCase>(
+        r#"
+        SELECT problem_id, input, solution
+        FROM testcases 
+        WHERE problem_id = ? LIMIT 1
+        "#,
+    )
+    .bind(problem_id)
+    .fetch_optional(pool)
+    .await
+}
 
 pub async fn insert_submission(
     pool: &MySqlPool,
@@ -376,23 +423,53 @@ pub async fn get_submission(
 pub async fn get_recent_submissions(
     pool: &MySqlPool,
     limit: i64,
-) -> Result<Vec<Submission>, sqlx::Error> {
-    sqlx::query_as::<_, Submission>(
+) -> Result<Vec<SubmissionStatus>, sqlx::Error> {
+    sqlx::query_as::<_, SubmissionStatus>(
         r#"
         SELECT
             submission_id,
-            user_id,
+            s.user_id,
+            u.user_name,
             problem_id,
             verdict,
             runtime_ms,
             memory_kb,
-            language,
-            source_code
-        FROM submissions
+            language
+        FROM submissions s
+        JOIN users u ON u.user_id = s.user_id
         ORDER BY submitted_time DESC, submission_id DESC
         LIMIT ?
         "#,
     )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_recent_submissions_by_user(
+    pool: &MySqlPool,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<SubmissionStatus>, sqlx::Error>{
+sqlx::query_as::<_, SubmissionStatus>(
+        r#"
+        SELECT
+            submission_id,
+            s.user_id,
+            u.user_name,
+            problem_id,
+            verdict,
+            runtime_ms,
+            memory_kb,
+            language
+        FROM submissions s
+        JOIN users u ON u.user_id = s.user_id
+        WHERE s.user_id = ?
+        ORDER BY submitted_time DESC, submission_id DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(user_id)
     .bind(limit)
     .fetch_all(pool)
     .await

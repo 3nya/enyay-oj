@@ -14,7 +14,8 @@ CREATE TABLE problems (
     problem_rating INT,
     problem_name VARCHAR(255) NOT NULL,
     runtime_ms BIGINT,
-    memory_mb BIGINT
+    memory_mb BIGINT,
+    problem_statement TEXT
 );
 ```
 ### testcases
@@ -51,6 +52,7 @@ CREATE TABLE submissions (
 ```sql
 CREATE TABLE users (
     user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_name VARCHAR(255) UNIQUE NOT NULL
+    user_name VARCHAR(255) UNIQUE NOT NULL,
+    auth_uid VARCHAR(255) UNIQUE NOT NULL
 );
 ```
