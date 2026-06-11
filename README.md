@@ -1,5 +1,5 @@
 <div align="center">
- <img src="/frontend/assets/enyayoj-logo.png" style="width: 60%;">
+ <img src="/frontend/assets/enyayoj-logo.png" style="width: 45%;">
  <br/>
  <strong>
    ･ﾟ:*✧୨ online judge written in rust ୧.ೃ࿐
