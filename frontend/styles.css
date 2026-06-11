@@ -178,20 +178,28 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
+.status-toolbar{
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+
+}
+
 .panel-title {
   margin: 0;
   font-size: 24px;
   line-height: 1.1;
 }
 
-.problem-table {
+.general-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
 }
 
-.problem-table th,
-.problem-table td {
+.general-table th,
+.general-table td {
   min-height: 46px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
@@ -199,25 +207,25 @@ a {
   vertical-align: middle;
 }
 
-.problem-table th {
+.general-table th {
   font-size: 26px;
   font-weight: 700;
 }
 
-.problem-table td {
+.general-table td {
   font-size: 24px;
 }
 
-.problem-table td:first-child,
-.problem-table th:first-child {
+.general-table td:first-child,
+.general-table th:first-child {
   text-align: left;
 }
 
-.problem-table a {
+.general-table a {
   text-decoration: none;
 }
 
-.problem-table a:hover {
+.general-table a:hover {
   text-decoration: underline;
 }
 
@@ -288,7 +296,7 @@ textarea {
 }
 
 .submit-layout,
-.problem-layout{
+.general-layout{
   display: grid;
   grid-template-columns: minmax(0, 1fr) 290px;
   gap: 18px;
@@ -304,26 +312,26 @@ textarea {
   overflow-wrap: anywhere;
 }
 
-.problem-layout{
+.general-layout{
   align-items: start;
 }
 
-.problem-summary {
+.general-summary {
   padding: 12px 14px;
 }
 
-.problem-summary dl {
+.general-summary dl {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 8px 14px;
   margin: 0;
 }
 
-.problem-summary dt {
+.general-summary dt {
   color: var(--muted);
 }
 
-.problem-summary dd {
+.general-summary dd {
   margin: 0;
   text-align: right;
 }
@@ -521,7 +529,7 @@ textarea {
 
   .home-grid,
   .submit-layout,
-  .problem-layout,
+  .general-layout,
   .form-grid {
     grid-template-columns: 1fr;
   }
@@ -535,17 +543,17 @@ textarea {
   }
 
   .announcement p,
-  .problem-table td,
-  .problem-table th {
+  .general-table td,
+  .general-table th {
     font-size: 20px;
   }
 
-  .problem-table col:nth-child(3) {
+  .general-table col:nth-child(3) {
     width: 0;
   }
 
-  .problem-table th:nth-child(3),
-  .problem-table td:nth-child(3) {
+  .general-table th:nth-child(3),
+  .general-table td:nth-child(3) {
     display: none;
   }
 }

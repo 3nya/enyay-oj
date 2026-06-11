@@ -38,6 +38,18 @@ pub struct Submission {
     pub source_code: String,
 }
 
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct SubmissionStatus{
+    pub submission_id: i64,
+    pub user_id: i64,
+    pub user_name: String,
+    pub problem_id: i64,
+    pub verdict: String,
+    pub runtime_ms: Option<i64>,
+    pub memory_kb: Option<i64>,
+    pub language: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Pending,
@@ -411,23 +423,53 @@ pub async fn get_submission(
 pub async fn get_recent_submissions(
     pool: &MySqlPool,
     limit: i64,
-) -> Result<Vec<Submission>, sqlx::Error> {
-    sqlx::query_as::<_, Submission>(
+) -> Result<Vec<SubmissionStatus>, sqlx::Error> {
+    sqlx::query_as::<_, SubmissionStatus>(
         r#"
         SELECT
             submission_id,
-            user_id,
+            s.user_id,
+            u.user_name,
             problem_id,
             verdict,
             runtime_ms,
             memory_kb,
-            language,
-            source_code
-        FROM submissions
+            language
+        FROM submissions s
+        JOIN users u ON u.user_id = s.user_id
         ORDER BY submitted_time DESC, submission_id DESC
         LIMIT ?
         "#,
     )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_recent_submissions_by_user(
+    pool: &MySqlPool,
+    user_id: i64,
+    limit: i64,
+) -> Result<Vec<SubmissionStatus>, sqlx::Error>{
+sqlx::query_as::<_, SubmissionStatus>(
+        r#"
+        SELECT
+            submission_id,
+            s.user_id,
+            u.user_name,
+            problem_id,
+            verdict,
+            runtime_ms,
+            memory_kb,
+            language
+        FROM submissions s
+        JOIN users u ON u.user_id = s.user_id
+        WHERE s.user_id = ?
+        ORDER BY submitted_time DESC, submission_id DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(user_id)
     .bind(limit)
     .fetch_all(pool)
     .await

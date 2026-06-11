@@ -4,22 +4,13 @@ const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
 const state = {
   problems: [],
   submissions: [],
+  userSubmissions: [],
   authReady: false,
   authError: null,
   currentUser: null,
 };
 
 const problemsPerPage = 10;
-
-const starterCode = `#include <iostream>
-
-int main() {
-    std::ios::sync_with_stdio(false);
-    std::cin.tie(nullptr);
-
-    return 0;
-}
-`;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -109,6 +100,11 @@ async function loadSubmissions() {
   if (state.submissions.length) return state.submissions;
   state.submissions = await api("/submissions/recent");
   return state.submissions;
+}
+async function loadSubmissionsByUser(userId){
+  if(state.userSubmissions.length) return state.userSubmissions;
+  state.userSubmissions = await api(`/submissions/recent/${userId}`);
+  return state.userSubmissions;
 }
 
 function renderLoading(label = "loading") {
@@ -200,7 +196,7 @@ async function renderProblemset() {
 
   app.innerHTML = `
     <section class="panel">
-      <table class="problem-table" aria-label="Problemset">
+      <table class="general-table" aria-label="Problemset">
         <colgroup>
           <col style="width: 40%;">
           <col style="width: 20%;">
@@ -232,7 +228,6 @@ async function renderProblemset() {
                   .join("")
               : `<tr><td class="empty-row" colspan="4">No problems found.</td></tr>`
           }
-          ${visibleProblems.length ? `<tr><td class="empty-row" colspan="4"></td></tr>` : ""}
         </tbody>
       </table>
     </section>
@@ -247,16 +242,21 @@ async function renderProblemset() {
 async function renderProblem(problemId){
   renderLoading("loading problem")
   const problem = await findProblem(problemId);
+  if(!problem){
+    renderPlaceholder("Problem does not exist");
+    return;
+  }
+
   const example = await findExample(problemId);
 
     app.innerHTML = `
-    <section class="problem-layout">
+    <section class="general-layout">
       <div class="panel">
         <div class="panel-header">
           <h1 class="panel-title">${escapeHtml(problem.problem_name)}</h1>
           <a class="button secondary" href="/problemset" data-link>problemset</a>
         </div>
-        <div class="problem-summary">
+        <div class="general-summary">
             <p class="preformatted">${escapeHtml(problem.problem_statement)}</p>
             ${
               example 
@@ -267,7 +267,7 @@ async function renderProblem(problemId){
                 <h1 class="panel-title">Input</h1>
                  <button class="button secondary" id="copy-input" type="button">copy</button>
               </div>
-              <div class="problem-summary">
+              <div class="general-summary">
                 <p class="preformatted">${escapeHtml(example.input)}</p>
               </div>
             </div>
@@ -277,7 +277,7 @@ async function renderProblem(problemId){
                 <h1 class="panel-title">Output</h1>
                 <button class="button secondary" id="copy-output" type="button">copy</button>
               </div>
-              <div class="problem-summary">
+              <div class="general-summary">
                 <p class="preformatted">${escapeHtml(example.solution)}</p>
               </div>
             </div>` : ""
@@ -291,7 +291,7 @@ async function renderProblem(problemId){
         <div class="panel-header">
           <h2 class="panel-title">problem</h2>
         </div>
-        <div class="problem-summary">
+        <div class="general-summary">
           <dl>
             <dt>name</dt>
             <dd>${escapeHtml(problem.problem_name)}</dd>
@@ -419,7 +419,7 @@ async function renderSubmit(problemId) {
         <div class="panel-header">
           <h2 class="panel-title">problem</h2>
         </div>
-        <div class="problem-summary">
+        <div class="general-summary">
           ${
             problem
               ? `
@@ -509,13 +509,13 @@ async function submitSolution(event) {
         source_code: data.get("source_code"),
       }),
     });
-
+    
+    state.userSubmissions = [];
     state.submissions = [];
 
     if (runJudge) {
       status.textContent = `submission ${submission.id} created, running judge`;
       await api(`/submissions/${submission.id}/judge`, { method: "POST" });
-      status.textContent = `submission ${submission.id} created and judge run completed`;
     } else {
       status.textContent = `submission ${submission.id} created`;
     }
@@ -524,7 +524,100 @@ async function submitSolution(event) {
     status.textContent = error.message;
   } finally {
     button.disabled = false;
+    navigate('/status/my');
   }
+}
+
+async function renderStatus(myOnly){
+  renderLoading("loading status");
+  let submissions = null;
+  if(myOnly && state.currentUser){
+    const user = await uidExists(state.currentUser.uid);
+    if(!user){
+      navigate('/login/users');
+      return;
+    }
+    submissions = await loadSubmissionsByUser(user.user_id);
+  }
+  else{
+    submissions = await loadSubmissions();
+    myOnly = false;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const requestedPage = Number(params.get("page") || "1");
+  const totalPages = Math.max(1, Math.ceil(submissions.length / problemsPerPage));
+  const currentPage = Math.min(Math.max(1, requestedPage || 1), totalPages);
+  const start = (currentPage - 1) * problemsPerPage;
+  const visibleSubmissions = submissions.slice(start, start + problemsPerPage);
+  const previousPage = Math.max(1, currentPage - 1);
+  const nextPage = Math.min(totalPages, currentPage + 1);
+  const statusPath = myOnly ? "/status/my" : "/status"
+
+  let myOnlyCheck = myOnly ? "checked" : "";
+
+  app.innerHTML = `
+    <section class="panel">
+      <div class="status-toolbar">
+        <label class="checkline">
+          <input id="my-only" type="checkbox" ${myOnlyCheck}>
+            my only
+        </label>
+      </div>
+      <table class="general-table" aria-label="Status">
+        <colgroup>
+          <col style="width: 10%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 10%;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>problem</th>
+            <th>who</th>
+            <th>runtime</th>
+            <th>memory</th>
+            <th>language</th>
+            <th>verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            visibleSubmissions.length
+              ? visibleSubmissions
+                  .map(
+                    (submission) => `
+                      <tr>
+                        <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
+                        <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
+                        <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
+                        <td>${escapeHtml(submission.memory_kb ?? "-")} KB</td>
+                        <td>${escapeHtml(submission.language ?? "-")}</td>
+                        <td>${escapeHtml(submission.verdict)}</td>
+                      </tr>
+                    `,
+                  )
+                  .join("")
+              : `<tr><td class="empty-row" colspan="6">No submissions found.</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+    <div class="page-number" aria-label="status pagination">
+      <a class="button secondary ${currentPage === 1 ? "disabled" : ""}" href="${statusPath}?page=${previousPage}" data-link>prev</a>
+      <span>page ${currentPage} of ${totalPages}</span>
+      <a class="button secondary ${currentPage === totalPages ? "disabled" : ""}" href="${statusPath}?page=${nextPage}" data-link>next</a>
+    </div>
+  `;
+
+  document.querySelector("#my-only").addEventListener("change", (event) => {
+    if(event.target.checked){
+      navigate("/status/my");
+    } else{
+      navigate("/status");
+    }
+  });
 }
 
 function renderPlaceholder(title, body) {
@@ -618,8 +711,8 @@ async function usernameExists(username){
 
 async function uidExists(uid){
   try{
-    await api(`/users/by-uid/${encodeURIComponent(uid)}`)
-    return true;
+    let user = await api(`/users/by-uid/${encodeURIComponent(uid)}`)
+    return user;
   } catch(error){
     if(error.message.includes("not found")){
       return false;
@@ -628,16 +721,26 @@ async function uidExists(uid){
   }
 }
 
+async function getUserById(id){
+  try{
+    let user = await api(`/users/${id}`);
+    return user;
+  } catch{
+    return null;
+  }
+}
+
 async function renderLogin() {
   const user = state.currentUser;
+  let dbUser = null;
   if (user){
-    const existing = await uidExists(user.uid);
-    if(!existing){
+    dbUser = await uidExists(user.uid);
+    if(!dbUser){
       navigate('/login/users')
       return;
     }
   } 
-  const displayName = user?.displayName || user?.email || "signed-in user";
+  const displayName = dbUser?.user_name || user?.displayName || user?.email || "signed-in user";
   const photoUrl = user?.photoURL;
   app.innerHTML = `
     <section class="login-layout">
@@ -707,6 +810,7 @@ async function signOut() {
   try {
     status.textContent = "signing out";
     await firebase.auth().signOut();
+    state.userSubmissions = [];
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
@@ -742,8 +846,10 @@ async function render() {
       await renderSubmit(null);
     } else if (route.startsWith("/submit/")) {
       await renderSubmit(route.split("/")[2]);
-    } else if (route === "/users-page") {
-      renderPlaceholder("users", "User browsing is not wired yet.");
+    } else if (route === "/status") {
+      await renderStatus(false);
+    } else if(route === "/status/my"){
+      await renderStatus(true);
     } else if (route === "/login") {
       await renderLogin();
     } else if (route === "/login/users"){

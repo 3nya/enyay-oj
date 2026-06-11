@@ -396,8 +396,15 @@ async fn get_submission(
 
 async fn get_recent_submissions(
     State(state): State<AppState>,
-) -> Result<Json<Vec<enyay::Submission>>, ApiError> {
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
     Ok(Json(enyay::get_recent_submissions(&state.pool, 20).await?))
+}
+
+async  fn get_recent_submissions_by_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
+    Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
 }
 
 async fn judge_submission(
@@ -464,7 +471,8 @@ async fn main() -> Result<(), ApiError> {
         .route("/problemset/problem/{problem_id}", get(frontend_index))
         .route("/submit", get(frontend_index))
         .route("/submit/{problem_id}", get(frontend_index))
-        .route("/users-page", get(frontend_index))
+        .route("/status", get(frontend_index))
+        .route("/status/my",get(frontend_index))
         .route("/login", get(frontend_index))
         .route("/login/users", get(frontend_index))
         .route("/about", get(frontend_index))
@@ -487,6 +495,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
         .route("/submissions/{submission_id}/judge", post(judge_submission))
+        .route("/submissions/recent/{user_id}", get(get_recent_submissions_by_user))
         .route(
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
