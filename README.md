@@ -1,48 +1,33 @@
-# enyay-oj
+<div align="center">
+ <img src="/frontend/assets/enyayoj-logo.png">
+ <strong>
+   ･ﾟ:*✧୨ online judge written in rust ୧.ೃ࿐
+ </strong>
+ <br/>
+ ༶•┈┈୨♡୧┈┈•༶
+</div>
 
-Stack
-- sql/postgres db, something (still deciding) backend/server, whatever frontend
+<br/>
 
-Project plan
-- [ ] Decide what functions are necessary
-- [ ] Design backend (postgresql) schemas 
-- [ ] Docker stuff for submitting code
-- [ ] Set up backend db and server
-- [ ] API endpoints 
-- [ ] Slop some ok looking frontend
+enyay-oj is a online judge made entirely in Rust. 
 
-goals: get this working for 1 language
+the project is purely a personal project of [enya](https://github.com/3nya) and [yanbo](https://github.com/Yanboww) (enya-y)! But please feel free to contribute as well! 
+
+We are still in our demo, and working on new features every day!
 
 
-## functions
+### Current Features
+- Code submission in C++ and Python (returns verdict, runtime, memory usage)
+- User login and submission tracking with Google Oauth
 
-problems
-- input/make new problem
-- get problem
 
-users submissions table
-- get recent 20 submissions
-- insert/submit problem
-- get result of submission
+![screenshot](./screenshots/image.png)
 
-user  
-- get id, username, pfp
 
-## db schema
+![screenshot](./screenshots/image1.png)
 
-problems table
-- problem id
-- problem title
-- CPU/Time limit
-- problem statement
 
-user submissions
-- user id
-- problem id
-- submission result (AC/WA/MLE/TLE/etc)
-- code submitted
-
-users 
-- user id
-- username
-- profile picture
+### Future Planned Features
+- Polygon format support for uploading problems
+- Migration to blob storage
+- Deployment
