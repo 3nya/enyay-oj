@@ -496,7 +496,12 @@ async function submitSolution(event) {
   status.textContent = "creating submission";
 
   try {
-    const user = await api(`/users/by-uid/${encodeURIComponent(state.currentUser.uid)}`);
+    const user = await uidExists(state.currentUser.uid);
+    if(!user){
+      status.textContent = "Please create a username";
+      status.className = "status error";
+      return;
+    }
     const submission = await api("/submissions", {
       method: "POST",
       body: JSON.stringify({
@@ -519,12 +524,12 @@ async function submitSolution(event) {
     } else {
       status.textContent = `submission ${submission.id} created`;
     }
+    navigate('/status/my');
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
   } finally {
     button.disabled = false;
-    navigate('/status/my');
   }
 }
 
