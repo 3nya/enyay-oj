@@ -83,10 +83,18 @@ pub async fn judge_submission(
     let compile_status = compile_with_docker(&binary, &source_code_file, language, judge_volume).await?;
     
 
-    let submission_results: SubmissionResults;
+    let mut submission_results: SubmissionResults;
     if !compile_status.success() {submission_results = SubmissionResults { verdict: Verdict::CompileError, metrics: Metric { runtime_ms: None, peak_memory_kb: None } }}
     else {submission_results = run_tests(submission, &problem, judge_volume, app_state, &binary,&source_code_file, language).await
     .unwrap_or(SubmissionResults { verdict: Verdict::JudgeFailure, metrics: Metric { runtime_ms: None, peak_memory_kb: None } })}
+    if submission_results.verdict == Verdict::Accepted || submission_results.verdict == Verdict::WrongAnswer{
+        if submission_results.metrics.runtime_ms.is_none() {
+            submission_results.metrics.runtime_ms = Some(0);
+        }
+        if submission_results.metrics.peak_memory_kb.is_none() {
+            submission_results.metrics.peak_memory_kb = Some(0);
+        }
+    }
     update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
     let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
     Ok(submission_results)
