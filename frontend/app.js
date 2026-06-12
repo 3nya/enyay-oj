@@ -1,4 +1,5 @@
 const app = document.querySelector("#app");
+const headerLogin = document.querySelector("#login-header");
 const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
 
 const state = {
@@ -8,6 +9,7 @@ const state = {
   authReady: false,
   authError: null,
   currentUser: null,
+  dbUser: null,
 };
 
 const problemsPerPage = 10;
@@ -79,7 +81,8 @@ function initFirebaseAuth() {
       state.authReady = true;
       state.authError = null;
       state.currentUser = user;
-
+      if(!user) state.dbUser = null;
+      renderHeaderLogin()
       if (window.location.pathname === "/login") {
         render();
       }
@@ -120,6 +123,39 @@ function renderError(error) {
       <p class="status error" style="padding: 0 14px 14px;">${escapeHtml(error.message)}</p>
     </section>
   `;
+}
+
+async function renderHeaderLogin(){
+  let dbUser = null;
+  if(state.currentUser){
+    dbUser = await uidExists(state.currentUser.uid);
+  }
+  headerLogin.innerHTML = `
+    ${
+      dbUser ?
+      `<div class="header-login-row">
+        <a class="header-login" href="/login" data-link data-nav="login">${escapeHtml(dbUser.user_name)}</a>
+        <span>|</span>
+        <a id = "header-logout" class="header-login">logout</a>
+      </div>
+      `
+      : `<a class="header-login" href="/login" data-link data-nav="login">login</a>`
+    }
+  `
+  if(dbUser){
+    document.querySelector("#header-logout")?.addEventListener("click", async (event) => {
+      event.preventDefault();
+      try{
+        await firebase.auth().signOut();
+        state.userSubmissions = [];
+        state.currentUser = null;
+        state.dbUser = null;
+        await renderHeaderLogin();
+      } catch{
+        navigate("/login");
+      }
+    });
+  }
 }
 
 async function renderHome() {
@@ -722,11 +758,14 @@ async function usernameExists(username){
 }
 
 async function uidExists(uid){
+  if(state.dbUser?.auth_uid === uid) return state.dbUser;
   try{
     let user = await api(`/users/by-uid/${encodeURIComponent(uid)}`)
+    state.dbUser = user;
     return user;
   } catch(error){
     if(error.message.includes("not found")){
+      state.dbUser = null;
       return false;
     }
     throw error;
@@ -823,6 +862,8 @@ async function signOut() {
     status.textContent = "signing out";
     await firebase.auth().signOut();
     state.userSubmissions = [];
+    state.currentUser = null;
+    state.dbUser = null;
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
@@ -896,3 +937,4 @@ document.addEventListener("click", (event) => {
 window.addEventListener("popstate", render);
 initFirebaseAuth();
 render();
+renderHeaderLogin()
