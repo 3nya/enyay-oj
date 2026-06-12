@@ -146,7 +146,7 @@ async function renderHome() {
                   .map(
                     (problem) => `
                       <li>
-                        <a href="/submit/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
+                        <a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
                         <span> ${escapeHtml(problem.runtime_ms)} ms, ${escapeHtml(problem.memory_mb)} MB, ${escapeHtml(problem.problem_rating)}</span>
                       </li>
                     `,
