@@ -11,6 +11,7 @@
   --accent: #4f8dc3;
   --accent-dark: #2f6fa6;
   --danger: #b84a4a;
+  --success: #45bd93;
 }
 
 * {
@@ -394,6 +395,14 @@ textarea {
 
 .status.error {
   color: var(--danger);
+}
+
+.status.success {
+  color: var(--success);
+}
+
+.status.pending {
+  color: var(--muted)
 }
 
 .recent-list {

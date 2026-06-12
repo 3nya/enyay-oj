@@ -560,6 +560,13 @@ async function renderStatus(myOnly){
 
   let myOnlyCheck = myOnly ? "checked" : "";
 
+  const rows = visibleSubmissions.map( (submission) => {
+    let status = "status error";
+    if(submission.verdict === "AC") status = "status success";
+    else if(submission.verdict === "PENDING") status = "status pending";
+    return {submission, status};
+  })
+
   app.innerHTML = `
     <section class="panel">
       <div class="status-toolbar">
@@ -570,12 +577,12 @@ async function renderStatus(myOnly){
       </div>
       <table class="general-table" aria-label="Status">
         <colgroup>
-          <col style="width: 10%;">
+          <col style="width: 5%;">
           <col style="width: 20%;">
           <col style="width: 20%;">
           <col style="width: 20%;">
           <col style="width: 20%;">
-          <col style="width: 10%;">
+          <col style="width: 15%;">
         </colgroup>
         <thead>
           <tr>
@@ -589,17 +596,17 @@ async function renderStatus(myOnly){
         </thead>
         <tbody>
           ${
-            visibleSubmissions.length
-              ? visibleSubmissions
+            rows.length
+              ? rows
                   .map(
-                    (submission) => `
+                    ({submission, status}) => `
                       <tr>
                         <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
                         <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
                         <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
                         <td>${escapeHtml(submission.memory_kb ?? "-")} KB</td>
                         <td>${escapeHtml(submission.language ?? "-")}</td>
-                        <td>${escapeHtml(submission.verdict)}</td>
+                        <td class="${status}">${escapeHtml(submission.verdict)}</td>
                       </tr>
                     `,
                   )
