@@ -1,4 +1,5 @@
 const app = document.querySelector("#app");
+const headerLogin = document.querySelector("#login-header");
 const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
 
 const state = {
@@ -8,6 +9,7 @@ const state = {
   authReady: false,
   authError: null,
   currentUser: null,
+  dbUser: null,
 };
 
 const problemsPerPage = 10;
@@ -79,7 +81,8 @@ function initFirebaseAuth() {
       state.authReady = true;
       state.authError = null;
       state.currentUser = user;
-
+      if(!user) state.dbUser = null;
+      renderHeaderLogin()
       if (window.location.pathname === "/login") {
         render();
       }
@@ -122,6 +125,39 @@ function renderError(error) {
   `;
 }
 
+async function renderHeaderLogin(){
+  let dbUser = null;
+  if(state.currentUser){
+    dbUser = await uidExists(state.currentUser.uid);
+  }
+  headerLogin.innerHTML = `
+    ${
+      dbUser ?
+      `<div class="header-login-row">
+        <a class="header-login" href="/login" data-link data-nav="login">${escapeHtml(dbUser.user_name)}</a>
+        <span>|</span>
+        <a id = "header-logout" class="header-login">logout</a>
+      </div>
+      `
+      : `<a class="header-login" href="/login" data-link data-nav="login">login</a>`
+    }
+  `
+  if(dbUser){
+    document.querySelector("#header-logout")?.addEventListener("click", async (event) => {
+      event.preventDefault();
+      try{
+        await firebase.auth().signOut();
+        state.userSubmissions = [];
+        state.currentUser = null;
+        state.dbUser = null;
+        await renderHeaderLogin();
+      } catch{
+        navigate("/login");
+      }
+    });
+  }
+}
+
 async function renderHome() {
   renderLoading("loading homepage");
   const [problems, submissions] = await Promise.all([
@@ -146,7 +182,7 @@ async function renderHome() {
                   .map(
                     (problem) => `
                       <li>
-                        <a href="/submit/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
+                        <a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
                         <span> ${escapeHtml(problem.runtime_ms)} ms, ${escapeHtml(problem.memory_mb)} MB, ${escapeHtml(problem.problem_rating)}</span>
                       </li>
                     `,
@@ -560,6 +596,13 @@ async function renderStatus(myOnly){
 
   let myOnlyCheck = myOnly ? "checked" : "";
 
+  const rows = visibleSubmissions.map( (submission) => {
+    let status = "status error";
+    if(submission.verdict === "AC") status = "status success";
+    else if(submission.verdict === "PENDING") status = "status pending";
+    return {submission, status};
+  })
+
   app.innerHTML = `
     <section class="panel">
       <div class="status-toolbar">
@@ -570,12 +613,12 @@ async function renderStatus(myOnly){
       </div>
       <table class="general-table" aria-label="Status">
         <colgroup>
-          <col style="width: 10%;">
+          <col style="width: 5%;">
           <col style="width: 20%;">
           <col style="width: 20%;">
           <col style="width: 20%;">
           <col style="width: 20%;">
-          <col style="width: 10%;">
+          <col style="width: 15%;">
         </colgroup>
         <thead>
           <tr>
@@ -589,17 +632,17 @@ async function renderStatus(myOnly){
         </thead>
         <tbody>
           ${
-            visibleSubmissions.length
-              ? visibleSubmissions
+            rows.length
+              ? rows
                   .map(
-                    (submission) => `
+                    ({submission, status}) => `
                       <tr>
                         <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
                         <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
                         <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
                         <td>${escapeHtml(submission.memory_kb ?? "-")} KB</td>
                         <td>${escapeHtml(submission.language ?? "-")}</td>
-                        <td>${escapeHtml(submission.verdict)}</td>
+                        <td class="${status}">${escapeHtml(submission.verdict)}</td>
                       </tr>
                     `,
                   )
@@ -715,11 +758,14 @@ async function usernameExists(username){
 }
 
 async function uidExists(uid){
+  if(state.dbUser?.auth_uid === uid) return state.dbUser;
   try{
     let user = await api(`/users/by-uid/${encodeURIComponent(uid)}`)
+    state.dbUser = user;
     return user;
   } catch(error){
     if(error.message.includes("not found")){
+      state.dbUser = null;
       return false;
     }
     throw error;
@@ -816,6 +862,8 @@ async function signOut() {
     status.textContent = "signing out";
     await firebase.auth().signOut();
     state.userSubmissions = [];
+    state.currentUser = null;
+    state.dbUser = null;
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
@@ -889,3 +937,4 @@ document.addEventListener("click", (event) => {
 window.addEventListener("popstate", render);
 initFirebaseAuth();
 render();
+renderHeaderLogin()

@@ -11,6 +11,7 @@
   --accent: #4f8dc3;
   --accent-dark: #2f6fa6;
   --danger: #b84a4a;
+  --success: #45bd93;
 }
 
 * {
@@ -68,6 +69,29 @@ a {
   height: 100%;
   object-fit: contain;
   object-position: left center;
+}
+
+.header-top{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.header-login{
+  color: var(--accent-dark);
+  text-decoration: none;
+  font-size: 22px;
+}
+
+.header-login:hover{
+  text-decoration: underline;
+}
+
+.header-login-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .nav-tabs {
@@ -394,6 +418,14 @@ textarea {
 
 .status.error {
   color: var(--danger);
+}
+
+.status.success {
+  color: var(--success);
+}
+
+.status.pending {
+  color: var(--muted)
 }
 
 .recent-list {
