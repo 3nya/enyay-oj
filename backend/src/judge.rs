@@ -110,6 +110,11 @@ async fn run_tests(
     language: Language
 )-> Result<SubmissionResults,Box<dyn std::error::Error>> {
     let test_cases = get_test_cases(&app_state.pool, problem.problem_id).await?;
+    let validator_file = format!("validator_{}_{}.out", problem.problem_id, submission.submission_id);
+    let output_file = format!("submission_{}_by_{}_q_{}.txt",
+        submission.submission_id
+        ,submission.user_id
+        ,submission.problem_id);
 
     let input_file = format!("{}_input_id_{}.txt",problem.problem_name,submission.submission_id);
     let mut verdict = Verdict::Accepted;
@@ -121,16 +126,23 @@ async fn run_tests(
             Duration::from_millis(problem.runtime_ms as u64),
     run_with_docker(problem, binary_file, source_code,&input_file, language, &container_name,judge_volume)
         ).await;
-        let submission_results = check_sol(user_sol, input,&container_name, source_code, problem).await;
+        let submission_results_pre = check_sol(judge_volume,submission,user_sol, &validator_file, &output_file,input,&container_name, source_code, problem, &input_file).await;
         let _ = kill_container(&container_name).await;
-        let submission_results = submission_results?;
+        let submission_results;
+        match submission_results_pre{
+            Ok(result) => submission_results =result,
+            Err(err) =>{
+                let _ = cleanup(&input_file, binary_file, &validator_file,&output_file,judge_volume).await;
+                return Err(Box::new(err));
+            }
+        }
         verdict = submission_results.verdict;
         update_metric(& mut metrics, &submission_results.metrics);
         if verdict != Verdict::Accepted {
             break;
         }
     }
-    let _ = cleanup(&input_file, binary_file, judge_volume).await;
+    let _ = cleanup(&input_file, binary_file, &validator_file,&output_file,judge_volume).await;
     //when crashes occur due to MLE or TLE, metrics is not calculated properly but we can assume they maxed resource usage
     if verdict == Verdict::MemoryLimitExceeded { metrics.peak_memory_kb = Some(problem.memory_mb*1024); }
     Ok(SubmissionResults { verdict, metrics})
@@ -138,19 +150,26 @@ async fn run_tests(
 }
 
 async fn check_sol<E>(
+    judge_volume: &JudgeVolume,
+    submission:&Submission,
     user_sol:Result<Result<Output,DockerError>,E>, 
+    validator_file:&str,
+    output_file: &str,
     input:&TestCase, 
     container_name: &str, 
     source_code: &str,
-    problem : &Problem
+    problem : &Problem,
+    input_file:&str
 ) -> Result<SubmissionResults,DockerError>{
     match user_sol {
         Ok(Ok(output)) => {
             let metrics = docker_metrics(&output, container_name).await?;
             match output.status.code() {
                 Some(0) => {
-                    if normalize_output(&String::from_utf8_lossy(&output.stdout).into_owned())
-                     == normalize_output(&input.solution) {
+                    let output = normalize_output(&String::from_utf8_lossy(&output.stdout).into_owned());
+                    if problem.judge_type =="standard" && output == normalize_output(&input.solution) {
+                        return Ok(SubmissionResults { verdict:Verdict::Accepted, metrics });
+                    } else if problem.judge_type == "validator" && validate_sol(judge_volume,submission,&output,output_file,input_file,validator_file, problem).await? {
                         return Ok(SubmissionResults { verdict:Verdict::Accepted, metrics });
                     }
                     Ok(SubmissionResults { verdict:Verdict::WrongAnswer, metrics })
@@ -167,6 +186,72 @@ async fn check_sol<E>(
         Err(_) => Ok(SubmissionResults { verdict: Verdict::TimeLimitExceeded, 
             metrics: Metric { runtime_ms: Some(problem.runtime_ms), peak_memory_kb: None } })
     }
+}
+
+async fn validate_sol(
+    judge_volume: &JudgeVolume,
+    submission:&Submission,
+    output: &str,
+    output_file: &str,
+    input_file:&str,
+    validator_file:&str,
+    problem : &Problem
+) -> Result<bool,DockerError> {
+    write_out_to_file(output, &judge_volume.output_dir, &output_file).await?;
+
+    let validator_path = judge_volume.output_dir.join(&validator_file);
+    if !fs::try_exists(&validator_path).await? {
+        let validator_code = format!("validator_{}_{}.cpp",problem.problem_id,submission.submission_id);
+        let source_code: &str;
+        match &problem.validator_code{
+            Some(code) => source_code = code,
+            _ => return Err(DockerError {  })
+        }
+        write_out_to_file(source_code,
+            &judge_volume.output_dir
+            ,&validator_code)
+            .await?;
+        let status = compile_with_docker(validator_file, &validator_code, Language::GCC14, judge_volume)
+            .await?;
+        let _ = delete_file(&validator_code, &judge_volume.output_dir).await;
+        if !status.success(){
+            return Err(DockerError{})
+        }
+    }
+
+    let validator = Command::new("docker")
+        .args(["run","--name", validator_file])
+        .args(["--label", "enyay-oj-judge=true"])       
+        .args(["--memory", "256m"])
+        .args(["--cap-drop", "ALL"])
+        .args(["--security-opt", "no-new-privileges"])
+        .args(["--pids-limit", "32"])
+        .args(["--log-driver", "json-file"])
+        .args(["--log-opt", "max-size=10m"])       
+        .args(["--cpus", "1.0"])           
+        .args(["--network", "none"])       
+        .args(["-v", &judge_volume.input_volume_mount])
+        .args(["-v",&judge_volume.user_volume_mount])
+        .args(["--user", "1000:1000"])
+        .args(["-w", "/app/workspace"])
+        .arg(Language::GCC14.as_img())
+        .arg( &format!("./{}",validator_file))
+        .args([&format!("/app/inputs/{}",input_file), output_file])
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let output = timeout(Duration::from_secs(2), validator.wait_with_output())
+        .await
+        .map_err(|_| DockerError{});
+    let _ = kill_container(validator_file).await;
+    let _ = delete_file(&output_file, &judge_volume.output_dir).await;
+    let output = output??;
+    if output.status.code() == Some(0) {
+        return Ok(true);
+    } else if output.status.code() == Some(1) {
+        return Ok(false);
+    } 
+    Err(DockerError {  })
 }
 
 fn normalize_output(str: &str) -> String{
@@ -349,9 +434,18 @@ async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
     fs::remove_file(path).await?;
     Ok(())
 }
-async fn cleanup(input_file:&str, binary_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
-    delete_file(input_file, &judge_volume.input_dir).await?;
-    delete_file(binary_file, &judge_volume.output_dir).await?;
+async fn cleanup(input_file:&str, binary_file: &str, validator_file:&str, output_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
+    let _ = delete_file(input_file, &judge_volume.input_dir).await;
+    let _ = delete_file(binary_file, &judge_volume.output_dir).await;
+
+
+    if fs::try_exists(judge_volume.output_dir.join(validator_file)).await.unwrap_or(false) {
+        let _ = delete_file(validator_file, &judge_volume.output_dir).await;
+    }
+
+    if fs::try_exists(judge_volume.output_dir.join(output_file)).await.unwrap_or(false) {
+        let _ = delete_file(output_file, &judge_volume.output_dir).await;
+    }
     Ok(())
 }
 
