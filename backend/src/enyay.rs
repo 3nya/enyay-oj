@@ -17,8 +17,22 @@ pub struct Problem {
     pub runtime_ms: i64,
     pub memory_mb: i64,
     pub problem_rating: i32,
-    pub problem_statement: String
+    pub problem_statement: String,
+    pub judge_type: String,
+    pub validator_code: Option<String>
 }
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct PublicProblem{
+        pub problem_id: i64,
+    pub problem_name: String,
+    pub runtime_ms: i64,
+    pub memory_mb: i64,
+    pub problem_rating: i32,
+    pub problem_statement: String,
+    pub judge_type: String
+}
+
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct TestCase {
     pub problem_id: i64,
@@ -262,12 +276,14 @@ pub async fn insert_problem(
     runtime_ms: i64,
     memory_mb: i64,
     problem_rating: i32,
-    problem_statement: &str
+    problem_statement: &str,
+    judge_type: &str,
+    validator_code: &str
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating, problem_statement)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type, validator_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(problem_name)
@@ -275,6 +291,8 @@ pub async fn insert_problem(
     .bind(memory_mb)
     .bind(problem_rating)
     .bind(problem_statement)
+    .bind(judge_type)
+    .bind(validator_code)
     .execute(pool)
     .await?;
 
@@ -287,7 +305,23 @@ pub async fn get_problem(
 ) -> Result<Option<Problem>, sqlx::Error> {
     sqlx::query_as::<_, Problem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type, validator_code
+        FROM problems
+        WHERE problem_id = ?
+        "#,
+    )
+    .bind(problem_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_public_problem(
+    pool: &MySqlPool,
+    problem_id: i64,
+) -> Result<Option<PublicProblem>, sqlx::Error> {
+    sqlx::query_as::<_, PublicProblem>(
+        r#"
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type
         FROM problems
         WHERE problem_id = ?
         "#,
@@ -300,10 +334,10 @@ pub async fn get_problem(
 pub async fn get_recent_problems(
     pool: &MySqlPool,
     limit: i64,
-) -> Result<Vec<Problem>, sqlx::Error> {
-    sqlx::query_as::<_, Problem>(
+) -> Result<Vec<PublicProblem>, sqlx::Error> {
+    sqlx::query_as::<_, PublicProblem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type
         FROM problems
         ORDER BY problem_id ASC
         LIMIT ?

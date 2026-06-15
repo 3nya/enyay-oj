@@ -101,7 +101,9 @@ struct CreateProblemRequest {
     runtime_ms: i64,
     memory_mb: i64,
     problem_rating: i32,
-    problem_statement: String
+    problem_statement: String,
+    judge_type: String,
+    validator_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -267,13 +269,15 @@ async fn create_problem(
     State(state): State<AppState>,
     Json(payload): Json<CreateProblemRequest>,
 ) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    let judge_type = payload.judge_type.trim();
+
     if payload.problem_name.trim().is_empty() {
         return Err(ApiError::BadRequest(
             "problem_name cannot be empty".to_string(),
         ));
     }
 
-    if payload.problem_statement.is_empty() {
+    if payload.problem_statement.trim().is_empty() {
         return Err(ApiError::BadRequest(
             "problem statement cannot be empty".to_string()
         ));
@@ -285,13 +289,26 @@ async fn create_problem(
         ));
     }
 
+    if judge_type != "standard" && judge_type != "validator" {
+        return Err(ApiError::BadRequest(
+            "One of the 2 modes must be selected, standard or validator".to_string(),
+        ));
+    }
+
+    let validator_code = payload.validator_code.unwrap_or(String::from(""));
+    if judge_type == "validator" && validator_code.trim().is_empty() {
+        return Err(ApiError::BadRequest("validator_code is required for validator problems".to_string()));
+    }
+    
     let id = enyay::insert_problem(
         &state.pool,
         payload.problem_name.trim(),
         payload.runtime_ms,
         payload.memory_mb,
         payload.problem_rating,
-        &payload.problem_statement
+        &payload.problem_statement,
+        judge_type,
+        &validator_code
     )
     .await?;
 
@@ -321,8 +338,8 @@ async fn create_testcase(
 async fn get_problem(
     State(state): State<AppState>,
     Path(problem_id): Path<i64>,
-) -> Result<Json<enyay::Problem>, ApiError> {
-    let problem = enyay::get_problem(&state.pool, problem_id)
+) -> Result<Json<enyay::PublicProblem>, ApiError> {
+    let problem = enyay::get_public_problem(&state.pool, problem_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
 
@@ -331,7 +348,7 @@ async fn get_problem(
 
 async fn get_recent_problems(
     State(state): State<AppState>,
-) -> Result<Json<Vec<enyay::Problem>>, ApiError> {
+) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError> {
     Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?))
 }
 
