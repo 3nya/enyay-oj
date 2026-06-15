@@ -76,10 +76,10 @@ pub async fn judge_submission(
 
     let language = fetch_language(submission).await?;
 
-    let source_code_file = format!("{}_code_submission_{}{}",problem.problem_name,submission.submission_id,language.as_exten());
+    let source_code_file = format!("prob_{}_code_submission_{}{}",problem.problem_id,submission.submission_id,language.as_exten());
     write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await?;
 
-    let binary = format!("{}_{}.out",problem.problem_name,submission.submission_id);
+    let binary = format!("prob_{}_{}.out",problem.problem_id,submission.submission_id);
     let compile_status = compile_with_docker(&binary, &source_code_file, language, judge_volume).await?;
     
 
@@ -116,7 +116,7 @@ async fn run_tests(
         ,submission.user_id
         ,submission.problem_id);
 
-    let input_file = format!("{}_input_id_{}.txt",problem.problem_name,submission.submission_id);
+    let input_file = format!("prob_{}_input_id_{}.txt",problem.problem_id,submission.submission_id);
     let mut verdict = Verdict::Accepted;
     let mut metrics = Metric{runtime_ms: None, peak_memory_kb: None};
     for (i,input) in test_cases.iter().enumerate(){
