@@ -1,6 +1,7 @@
 const app = document.querySelector("#app");
 const headerLogin = document.querySelector("#login-header");
 const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
+let statusRefreshTimer = null;
 
 const state = {
   problems: [],
@@ -442,10 +443,6 @@ async function renderSubmit(problemId) {
           </div>
           <div class="actions">
             <button class="button" type="submit">submit</button>
-            <label class="checkline">
-              <input id="run-judge" type="checkbox" checked>
-              run judge
-            </label>
           </div>
           <div class="status" id="submit-status" role="status"></div>
         </div>
@@ -524,7 +521,6 @@ async function submitSolution(event) {
 
   const form = event.currentTarget;
   const button = form.querySelector("button[type='submit']");
-  const runJudge = document.querySelector("#run-judge").checked;
   const data = new FormData(form);
 
   button.disabled = true;
@@ -554,12 +550,7 @@ async function submitSolution(event) {
     state.userSubmissions = [];
     state.submissions = [];
 
-    if (runJudge) {
-      status.textContent = `submission ${submission.id} created, running judge`;
-      await api(`/submissions/${submission.id}/judge`, { method: "POST" });
-    } else {
-      status.textContent = `submission ${submission.id} created`;
-    }
+    status.textContent = `submission ${submission.id} created, running judge`;
     navigate('/status/my');
   } catch (error) {
     status.className = "status error";
@@ -569,8 +560,21 @@ async function submitSolution(event) {
   }
 }
 
-async function renderStatus(myOnly){
+async function renderStatus(){
   renderLoading("loading status");
+  stopRefresh()
+  await renderTable();
+
+  statusRefreshTimer = setInterval(() => {
+    renderTable().catch(console.error);
+  }, 3000);
+}
+
+async function renderTable(){
+  let myOnly = window.location.pathname === "/status/my"
+  if(!myOnly) state.submissions = [];
+  else state.userSubmissions = [];
+
   let submissions = null;
   if(myOnly && state.currentUser){
     const user = await uidExists(state.currentUser.uid);
@@ -666,6 +670,13 @@ async function renderStatus(myOnly){
       navigate("/status");
     }
   });
+}
+
+function stopRefresh(){
+  if(statusRefreshTimer){
+    clearInterval(statusRefreshTimer);
+    statusRefreshTimer = null;
+  }
 }
 
 function renderPlaceholder(title, body) {
@@ -887,6 +898,7 @@ async function copyIdToken() {
 async function render() {
   const route = window.location.pathname;
   setActiveNav(route);
+  if(!route.startsWith("/status")) stopRefresh()
 
   try {
     if (route === "/") {
@@ -899,10 +911,8 @@ async function render() {
       await renderSubmit(null);
     } else if (route.startsWith("/submit/")) {
       await renderSubmit(route.split("/")[2]);
-    } else if (route === "/status") {
-      await renderStatus(false);
-    } else if(route === "/status/my"){
-      await renderStatus(true);
+    } else if (route.startsWith("/status")) {
+      await renderStatus();
     } else if (route === "/login") {
       await renderLogin();
     } else if (route === "/login/users"){

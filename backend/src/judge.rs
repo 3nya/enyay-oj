@@ -4,6 +4,7 @@ use std::{path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
 use chrono::{DateTime, Utc};
 use crate::{AppState, enyay::*};
 
+#[derive(Clone)]
 pub struct JudgeVolume{
     input_volume_mount: String,
     user_volume_mount: String,
@@ -69,9 +70,10 @@ pub struct SubmissionResults{
 
 pub async fn judge_submission(
     submission:&Submission, 
-    judge_volume: &JudgeVolume, 
     app_state: &AppState
-) -> Result<SubmissionResults,Box<dyn std::error::Error>> {
+) -> Result<SubmissionResults,Box<dyn std::error::Error + Send + Sync>> {
+    let judge_volume = &app_state.judge_volume;
+
     let problem = fetch_question(submission, app_state).await?;
 
     let language = fetch_language(submission).await?;

@@ -1,7 +1,7 @@
 mod enyay;
 mod judge;
 
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -12,13 +12,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
-use tokio::net::TcpListener;
-
-use crate::{enyay::Verdict};
+use tokio::{net::TcpListener, sync::Semaphore};
 
 #[derive(Clone)]
 struct AppState {
     pool: MySqlPool,
+    judge_volume: judge::JudgeVolume,
+    judge_limit:Arc<Semaphore>
 }
 
 #[derive(Debug)]
@@ -397,6 +397,28 @@ async fn create_submission(
         }
     };
 
+    let submission = enyay::get_submission(&state.pool, id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("submission {id} not found!")))?;
+    let state_clone = state.clone();
+
+    tokio::spawn(async move{
+        if let Ok(_permit) = state_clone.judge_limit.acquire().await{
+            if let Err(error) = judge::judge_submission(&submission,&state_clone).await{
+                eprintln!("Judge Failure, Submission: {}, Error: {error}", submission.submission_id);
+                let _ = enyay::update_submission_verdict(
+                    &state_clone.pool, 
+                    submission.submission_id, 
+                    enyay::Verdict::JudgeFailure, 
+                    None, 
+                    None
+                ).await;
+            }
+        } else{
+            eprintln!("Failed to generate permit for judge request");
+        }
+    });
+
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
 }
 
@@ -432,8 +454,7 @@ async fn judge_submission(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
 
-    let judge_volume = judge::JudgeVolume::new()?;
-    judge::judge_submission(&submission, &judge_volume, &state)
+    judge::judge_submission(&submission, &state)
         .await
         .map_err(|error| ApiError::Judge(error.to_string()))?;
 
@@ -464,8 +485,8 @@ async fn update_submission_verdict(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
-    Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
+fn parse_verdict(value: &str) -> Result<enyay::Verdict, ApiError> {
+    enyay::Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
 }
 
 #[tokio::main]
@@ -481,7 +502,10 @@ async fn main() -> Result<(), ApiError> {
         .connect(&db_url)
         .await?;
     println!("connected to database");
+
     judge::cleanup_containers().await?;
+    let judge_volume = judge::JudgeVolume::new()?;
+
     let app = Router::new()
         .route("/", get(frontend_index))
         .route("/problemset", get(frontend_index))
@@ -517,7 +541,11 @@ async fn main() -> Result<(), ApiError> {
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
         )
-        .with_state(AppState { pool });
+        .with_state(AppState{ 
+            pool, 
+            judge_volume,
+            judge_limit: Arc::new(Semaphore::new(1))
+        });
 
     let addr = bind_addr
         .parse::<SocketAddr>()
