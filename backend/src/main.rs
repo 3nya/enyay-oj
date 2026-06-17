@@ -74,6 +74,20 @@ impl From<std::io::Error> for ApiError {
     }
 }
 
+impl From<enyay::SubmissionError> for ApiError{
+    fn from(error: enyay::SubmissionError) -> Self{
+        match error {
+            enyay::SubmissionError::SubmissionLimitExceeded(message) =>{
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::TransactionFailed(err) =>{
+                return Self::Database(err)
+            }
+        }
+    }
+}
+
+
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
@@ -505,6 +519,12 @@ async fn main() -> Result<(), ApiError> {
 
     judge::cleanup_containers().await?;
     let judge_volume = judge::JudgeVolume::new()?;
+
+    let cleared = enyay::cleanup_submissions(&pool).await;
+    match cleared{
+        Ok(count) => eprintln!("{} stale submissions skipped and marked JF", count),
+        Err(_) => eprintln!("failed to cleanup stale submissions")
+    }
 
     let app = Router::new()
         .route("/", get(frontend_index))

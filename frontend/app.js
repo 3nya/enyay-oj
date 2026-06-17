@@ -513,11 +513,6 @@ function enableTabs(textarea) {
 async function submitSolution(event) {
   const status = document.querySelector("#submit-status");
   event.preventDefault();
-  if(!state.currentUser){
-    status.textContent = "Please login";
-    status.className = "status error"
-    return;
-  }
 
   const form = event.currentTarget;
   const button = form.querySelector("button[type='submit']");
@@ -525,15 +520,22 @@ async function submitSolution(event) {
 
   button.disabled = true;
   status.className = "status";
-  status.textContent = "creating submission";
+  status.textContent = "checking submission";
 
   try {
+    if(!state.currentUser){
+      status.textContent = "Please login";
+      status.className = "status error";
+      return;
+    }
     const user = await uidExists(state.currentUser.uid);
     if(!user){
       status.textContent = "Please create a username";
       status.className = "status error";
       return;
     }
+
+    status.textContent = "creating submission";
     const submission = await api("/submissions", {
       method: "POST",
       body: JSON.stringify({
@@ -563,11 +565,17 @@ async function submitSolution(event) {
 async function renderStatus(){
   renderLoading("loading status");
   stopRefresh()
-  await renderTable();
+  const shouldPull = await renderTable();
 
-  statusRefreshTimer = setInterval(() => {
-    renderTable().catch(console.error);
-  }, 3000);
+  if(shouldPull){
+    statusRefreshTimer = setInterval( async () => {
+      const shouldContinue = await renderTable().catch((error) =>{
+        console.error(error);
+        return false;
+      });
+      if(!shouldContinue) stopRefresh();
+    }, 3000);
+  }
 }
 
 async function renderTable(){
@@ -670,6 +678,11 @@ async function renderTable(){
       navigate("/status");
     }
   });
+  return myOnly ? hasPending() : true;
+}
+
+function hasPending(){
+  return state.userSubmissions.some((submission) => submission.verdict === "PENDING");
 }
 
 function stopRefresh(){

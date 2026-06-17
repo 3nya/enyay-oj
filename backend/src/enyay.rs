@@ -62,6 +62,7 @@ pub struct SubmissionStatus{
     pub runtime_ms: Option<i64>,
     pub memory_kb: Option<i64>,
     pub language: Option<String>,
+    pub submitted_time: String
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +196,18 @@ impl FromStr for Language{
             "python3" => Ok(Self::PYTHON3_12),
             _ => Err(LanguageNotSupportedError)
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum SubmissionError{
+    SubmissionLimitExceeded(String),
+    TransactionFailed(sqlx::Error),
+}
+
+impl From<sqlx::Error> for SubmissionError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::TransactionFailed(error)
     }
 }
 
@@ -409,7 +422,36 @@ pub async fn insert_submission(
     memory_kb: Option<i64>,
     language: Option<&str>,
     source_code: &str,
-) -> Result<i64, sqlx::Error> {
+) -> Result<i64, SubmissionError> {
+     let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+        SELECT user_id FROM users
+        WHERE user_id = ?
+        FOR UPDATE
+        "#
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let pending_count:i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM submissions
+        WHERE user_id = ? AND verdict = 'PENDING'
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if pending_count > 0 {
+        return Err(SubmissionError::SubmissionLimitExceeded(
+            format!("User {} already has ongoing submissions!", user_id)
+        ));
+    }
+
     let result = sqlx::query(
         r#"
         INSERT INTO submissions
@@ -424,8 +466,10 @@ pub async fn insert_submission(
     .bind(memory_kb)
     .bind(language)
     .bind(source_code)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?; 
 
     Ok(last_insert_id(result))
 }
@@ -468,10 +512,11 @@ pub async fn get_recent_submissions(
             verdict,
             runtime_ms,
             memory_kb,
-            language
+            language,
+            DATE_FORMAT(submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
         FROM submissions s
         JOIN users u ON u.user_id = s.user_id
-        ORDER BY submitted_time DESC, submission_id DESC
+        ORDER BY s.submitted_time DESC, submission_id DESC
         LIMIT ?
         "#,
     )
@@ -495,11 +540,12 @@ sqlx::query_as::<_, SubmissionStatus>(
             verdict,
             runtime_ms,
             memory_kb,
-            language
+            language,
+            DATE_FORMAT(submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
         FROM submissions s
         JOIN users u ON u.user_id = s.user_id
         WHERE s.user_id = ?
-        ORDER BY submitted_time DESC, submission_id DESC
+        ORDER BY s.submitted_time DESC, submission_id DESC
         LIMIT ?
         "#,
     )
@@ -568,6 +614,27 @@ pub async fn update_submission_verdict(
     .bind(runtime_ms)
     .bind(memory_kb)
     .bind(submission_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+/* 
+Should only be called on startup.
+If we implement queues, we won't
+need this anymore.
+*/
+pub async fn cleanup_submissions(
+    pool: &MySqlPool
+) -> Result<u64, sqlx::Error>{
+    let result = sqlx::query(
+        r#"
+        UPDATE submissions
+        SET verdict = 'JF'
+        WHERE verdict = 'PENDING'
+        "#
+    )
     .execute(pool)
     .await?;
 
