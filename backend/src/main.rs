@@ -1,5 +1,6 @@
 mod enyay;
 mod judge;
+mod storage;
 
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
@@ -28,6 +29,7 @@ enum ApiError {
     Database(sqlx::Error),
     Io(std::io::Error),
     Judge(String),
+    Storage(storage::StorageError),
 }
 
 impl IntoResponse for ApiError {
@@ -56,6 +58,13 @@ impl IntoResponse for ApiError {
                     format!("judge failed: {error}"),
                 )
             }
+            Self::Storage(error) => {
+                eprintln!("storage error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("storage request failed: {error}"),
+                )
+            }
         };
 
         (status, Json(ErrorResponse { error: message })).into_response()
@@ -71,6 +80,12 @@ impl From<sqlx::Error> for ApiError {
 impl From<std::io::Error> for ApiError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl From<storage::StorageError> for ApiError {
+    fn from(error: storage::StorageError) -> Self {
+        Self::Storage(error)
     }
 }
 
@@ -143,6 +158,16 @@ struct UpdateVerdictRequest {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn get_storage_object(Path(key): Path<String>) -> Result<impl IntoResponse, ApiError> {
+    let storage = storage::Storage::from_env()?;
+    let bytes = storage.get_object(&key).await?;
+
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        bytes,
+    ))
 }
 
 async fn frontend_index() -> Html<&'static str> {
@@ -511,6 +536,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/assets/enyayoj-mascot.png", get(frontend_mascot))
         .route("/assets/favicon.ico", get(frontend_favicon))
         .route("/health", get(health))
+        .route("/storage/{*key}", get(get_storage_object))
         .route("/users", get(get_users).post(create_user))
         .route("/users/by-name/{user_name}", get(get_user_by_name))
         .route("/users/by-uid/{uid}", get(get_user_by_uid))
