@@ -1,0 +1,549 @@
+mod enyay;
+mod judge;
+
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
+
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{StatusCode, header},
+    response::{Html, IntoResponse, Response},
+    routing::{get, patch, post},
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
+use tokio::{net::TcpListener, sync::Semaphore};
+
+#[derive(Clone)]
+struct AppState {
+    pool: MySqlPool,
+    judge_volume: judge::JudgeVolume,
+    judge_limit:Arc<Semaphore>
+}
+
+#[derive(Debug)]
+enum ApiError {
+    BadRequest(String),
+    NotFound(String),
+    Database(sqlx::Error),
+    Io(std::io::Error),
+    Judge(String),
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+            Self::NotFound(message) => (StatusCode::NOT_FOUND, message),
+            Self::Database(error) => {
+                eprintln!("database error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database request failed".to_string(),
+                )
+            }
+            Self::Io(error) => {
+                eprintln!("server error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server request failed".to_string(),
+                )
+            }
+            Self::Judge(error) => {
+                eprintln!("judge error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("judge failed: {error}"),
+                )
+            }
+        };
+
+        (status, Json(ErrorResponse { error: message })).into_response()
+    }
+}
+
+impl From<sqlx::Error> for ApiError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
+}
+
+impl From<std::io::Error> for ApiError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<enyay::SubmissionError> for ApiError{
+    fn from(error: enyay::SubmissionError) -> Self{
+        match error {
+            enyay::SubmissionError::SubmissionLimitExceeded(message) =>{
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::TransactionFailed(err) =>{
+                return Self::Database(err)
+            }
+        }
+    }
+}
+
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+#[derive(Serialize)]
+struct IdResponse {
+    id: i64,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+}
+
+#[derive(Deserialize)]
+struct CreateUserRequest {
+    user_name: String,
+    auth_uid: String,
+}
+
+#[derive(Deserialize)]
+struct CreateProblemRequest {
+    problem_name: String,
+    runtime_ms: i64,
+    memory_mb: i64,
+    problem_rating: i32,
+    problem_statement: String,
+    judge_type: String,
+    validator_code: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateTestCaseRequest {
+    testcases: String,
+    solution: String
+}
+
+#[derive(Deserialize)]
+struct CreateSubmissionRequest {
+    user_id: i64,
+    problem_id: i64,
+    language: Option<String>,
+    source_code: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateVerdictRequest {
+    verdict: String,
+    runtime_ms: Option<i64>,
+    memory_kb: Option<i64>,
+}
+
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse { status: "ok" })
+}
+
+async fn frontend_index() -> Html<&'static str> {
+    Html(include_str!("../../frontend/index.html"))
+}
+
+async fn frontend_styles() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../../frontend/styles.css"),
+    )
+}
+
+async fn frontend_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../../frontend/app.js"),
+    )
+}
+
+async fn frontend_logo() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../frontend/assets/enyayoj-logo.png").as_slice(),
+    )
+}
+
+async fn frontend_mascot() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../../frontend/assets/enyayoj-mascot.png").as_slice(),
+    )
+}
+
+async fn frontend_favicon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/x-icon")],
+        include_bytes!("../../frontend/assets/favicon.ico").as_slice(),
+    )
+}
+
+async fn get_example_test(
+    State(state) : State<AppState>,
+    Path(problem_id):Path<i64>
+) -> Result<Json<enyay::TestCase>, ApiError> {
+    let example = enyay::get_example_test(&state.pool, problem_id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("No Example Testcase found".to_string()))?;
+    Ok(Json(example))
+}
+
+async fn get_users(State(state): State<AppState>) -> Result<Json<Vec<enyay::User>>, ApiError> {
+    Ok(Json(enyay::get_users(&state.pool).await?))
+}
+
+async fn get_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+) -> Result<Json<enyay::User>, ApiError> {
+    let user = enyay::get_user(&state.pool, user_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("user {user_id} not found")))?;
+
+    Ok(Json(user))
+}
+
+async fn get_user_by_name(
+    State(state): State<AppState>,
+    Path(user_name): Path<String>,
+) -> Result<Json<enyay::User>, ApiError> {
+    let user = enyay::get_user_by_name(&state.pool, &user_name)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("user {user_name} not found")))?;
+
+    Ok(Json(user))
+}
+
+async fn get_user_by_uid(
+    State(state): State<AppState>,
+    Path(auth_uid): Path<String>,
+) -> Result<Json<enyay::User>, ApiError> {
+    let user = enyay::get_user_by_uid(&state.pool, &auth_uid)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("uid not found".to_string()))?;
+    Ok(Json(user))
+}
+
+async fn create_user(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateUserRequest>,
+) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    let username = payload.user_name.trim();
+    if username.is_empty() {
+        return Err(ApiError::BadRequest(
+            "user_name cannot be empty".to_string(),
+        ));
+    }
+    validate_username(username)?;
+    if payload.auth_uid.is_empty() {
+        return Err(ApiError::BadRequest(
+            "uid cannot be empty".to_string(),
+        ))
+    }
+    let id = enyay::insert_user(&state.pool, username, &payload.auth_uid).await?;
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+fn validate_username(username:&str) -> Result<(),ApiError>{
+    if username.len() < 3 || username.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "usernames must be between 3-20 characters".to_string(),
+        ));
+    }
+
+    if !username.chars().next().is_some_and(|c| c.is_ascii_alphabetic()){
+        return Err(ApiError::BadRequest(
+            "usernames must start with a letter".to_string(),
+        ));
+    }
+    if username.chars().next_back().is_some_and(|c| c == '_') {
+        return Err(ApiError::BadRequest(
+            "usernames cannot have trailing underscores".to_string(),
+        ));
+    }
+    if !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ApiError::BadRequest(
+            "usernames may only contain letters, numbers and underscores".to_string()
+        ));
+    }
+    Ok(())
+}
+
+async fn create_problem(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateProblemRequest>,
+) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    let judge_type = payload.judge_type.trim();
+
+    if payload.problem_name.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "problem_name cannot be empty".to_string(),
+        ));
+    }
+
+    if payload.problem_statement.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "problem statement cannot be empty".to_string()
+        ));
+    }
+
+    if payload.runtime_ms <= 0 || payload.memory_mb <= 0 {
+        return Err(ApiError::BadRequest(
+            "runtime_ms and memory_kb must be positive".to_string(),
+        ));
+    }
+
+    if judge_type != "standard" && judge_type != "validator" {
+        return Err(ApiError::BadRequest(
+            "One of the 2 modes must be selected, standard or validator".to_string(),
+        ));
+    }
+
+    let validator_code = payload.validator_code.unwrap_or(String::from(""));
+    if judge_type == "validator" && validator_code.trim().is_empty() {
+        return Err(ApiError::BadRequest("validator_code is required for validator problems".to_string()));
+    }
+    
+    let id = enyay::insert_problem(
+        &state.pool,
+        payload.problem_name.trim(),
+        payload.runtime_ms,
+        payload.memory_mb,
+        payload.problem_rating,
+        &payload.problem_statement,
+        judge_type,
+        &validator_code
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn create_testcase(
+    State(state): State<AppState>,
+    Path(problem_id): Path<i64>,
+    Json(payload): Json<CreateTestCaseRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    if problem_id <= 0 {
+        return Err(ApiError::BadRequest("Problem id must be positive".to_string()));
+    }
+    if payload.solution.trim().is_empty() || payload.testcases.trim().is_empty() {
+        return Err(ApiError::BadRequest("Testcases and solutions must not be empty".to_string()));
+    }
+    let id = enyay::insert_testcase(
+        &state.pool,
+        problem_id,
+        &payload.testcases, 
+        &payload.solution)
+        .await?;
+    Ok((StatusCode::CREATED,Json(IdResponse { id })))
+}
+
+async fn get_problem(
+    State(state): State<AppState>,
+    Path(problem_id): Path<i64>,
+) -> Result<Json<enyay::PublicProblem>, ApiError> {
+    let problem = enyay::get_public_problem(&state.pool, problem_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
+
+    Ok(Json(problem))
+}
+
+async fn get_recent_problems(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError> {
+    Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?))
+}
+
+async fn create_submission(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateSubmissionRequest>,
+) -> Result<(StatusCode, Json<IdResponse>), ApiError> {
+    if payload.source_code.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "source_code cannot be empty".to_string(),
+        ));
+    }
+
+    let language = payload.language.as_deref();
+
+    let id = enyay::insert_submission(
+                &state.pool,
+                payload.user_id,
+                payload.problem_id,
+                enyay::Verdict::Pending,
+                None,
+                None,
+                language,
+                &payload.source_code,
+    )
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn get_submission(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+) -> Result<Json<enyay::Submission>, ApiError> {
+    let submission = enyay::get_submission(&state.pool, submission_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
+
+    Ok(Json(submission))
+}
+
+async fn get_recent_submissions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
+    Ok(Json(enyay::get_recent_submissions(&state.pool, 20).await?))
+}
+
+async  fn get_recent_submissions_by_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
+    Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
+}
+
+//this should be deleted since the queue now handles judge
+async fn judge_submission(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let submission = enyay::get_submission(&state.pool, submission_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
+
+    judge::judge_submission(&submission, &state)
+        .await
+        .map_err(|error| ApiError::Judge(error.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_submission_verdict(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    Json(payload): Json<UpdateVerdictRequest>,
+) -> Result<StatusCode, ApiError> {
+    let verdict = parse_verdict(&payload.verdict)?;
+    let rows_affected = enyay::update_submission_verdict(
+        &state.pool,
+        submission_id,
+        verdict,
+        payload.runtime_ms,
+        payload.memory_kb,
+    )
+    .await?;
+
+    if rows_affected == 0 {
+        return Err(ApiError::NotFound(format!(
+            "submission {submission_id} not found"
+        )));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn parse_verdict(value: &str) -> Result<enyay::Verdict, ApiError> {
+    enyay::Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), ApiError> {
+    load_env();
+
+    let db_url = std::env::var("DB_URL").unwrap();
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+
+    println!("connecting to database at {db_url}");
+    let pool = MySqlPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await?;
+    println!("connected to database");
+
+    judge::cleanup_containers().await?;
+    let judge_volume = judge::JudgeVolume::new()?;
+
+    let cleared = enyay::cleanup_submissions(&pool).await;
+    match cleared{
+        Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
+        Err(_) => eprintln!("failed to cleanup stale submissions")
+    }
+
+    let app_state = AppState{
+        pool, 
+        judge_volume, 
+        judge_limit: Arc::new(Semaphore::new(1))
+    };
+
+    let worker_count = 1;
+    for _ in 0..worker_count{
+        let worker_state = app_state.clone();
+        tokio::spawn(async move{
+            judge::judge_worker_loop(worker_state).await;
+        });
+    }
+
+    let app = Router::new()
+        .route("/", get(frontend_index))
+        .route("/problemset", get(frontend_index))
+        .route("/problemset/problem/{problem_id}", get(frontend_index))
+        .route("/submit", get(frontend_index))
+        .route("/submit/{problem_id}", get(frontend_index))
+        .route("/status", get(frontend_index))
+        .route("/status/my",get(frontend_index))
+        .route("/login", get(frontend_index))
+        .route("/login/users", get(frontend_index))
+        .route("/about", get(frontend_index))
+        .route("/styles.css", get(frontend_styles))
+        .route("/app.js", get(frontend_script))
+        .route("/assets/enyayoj-logo.png", get(frontend_logo))
+        .route("/assets/enyayoj-mascot.png", get(frontend_mascot))
+        .route("/assets/favicon.ico", get(frontend_favicon))
+        .route("/health", get(health))
+        .route("/users", get(get_users).post(create_user))
+        .route("/users/by-name/{user_name}", get(get_user_by_name))
+        .route("/users/by-uid/{uid}", get(get_user_by_uid))
+        .route("/users/{user_id}", get(get_user))
+        .route("/problems", post(create_problem))
+        .route("/problems/all", get(get_recent_problems))
+        .route("/problems/{problem_id}", get(get_problem))
+        .route("/problems/{problem_id}/example",get(get_example_test))
+        .route("/problems/{problem_id}/testcases", post(create_testcase))
+        .route("/submissions", post(create_submission))
+        .route("/submissions/recent", get(get_recent_submissions))
+        .route("/submissions/{submission_id}", get(get_submission))
+        .route("/submissions/{submission_id}/judge", post(judge_submission))
+        .route("/submissions/recent/{user_id}", get(get_recent_submissions_by_user))
+        .route(
+            "/submissions/{submission_id}/verdict",
+            patch(update_submission_verdict),
+        )
+        .with_state(app_state);
+
+    let addr = bind_addr
+        .parse::<SocketAddr>()
+        .map_err(|error| ApiError::BadRequest(format!("invalid BIND_ADDR: {error}")))?;
+    let listener = TcpListener::bind(addr).await?;
+
+    println!("server listening on http://{addr}");
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+fn load_env() {
+    if dotenvy::dotenv().is_err() {
+        dotenvy::from_filename("backend/.env").ok();
+    }
+}
