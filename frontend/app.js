@@ -541,9 +541,6 @@ async function submitSolution(event) {
       body: JSON.stringify({
         user_id: user.user_id,
         problem_id: Number(data.get("problem_id")),
-        verdict: "PENDING",
-        runtime_ms: null,
-        memory_kb: null,
         language: data.get("language"),
         source_code: data.get("source_code"),
       }),
@@ -611,7 +608,7 @@ async function renderTable(){
   const rows = visibleSubmissions.map( (submission) => {
     let status = "status error";
     if(submission.verdict === "AC") status = "status success";
-    else if(submission.verdict === "PENDING") status = "status pending";
+    else if(submission.verdict === "PENDING" || submission.verdict === "JUDGING") status = "status pending";
     return {submission, status};
   })
 
@@ -682,7 +679,9 @@ async function renderTable(){
 }
 
 function hasPending(){
-  return state.userSubmissions.some((submission) => submission.verdict === "PENDING");
+  return state.userSubmissions.some((submission) => 
+    (submission.verdict === "PENDING" || submission.verdict === "JUDGING")
+  );
 }
 
 function stopRefresh(){

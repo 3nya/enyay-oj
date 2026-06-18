@@ -128,12 +128,8 @@ struct CreateTestCaseRequest {
 
 #[derive(Deserialize)]
 struct CreateSubmissionRequest {
-    submission_id: Option<i64>,
     user_id: i64,
     problem_id: i64,
-    verdict: Option<String>,
-    runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
     language: Option<String>,
     source_code: String,
 }
@@ -376,62 +372,19 @@ async fn create_submission(
         ));
     }
 
-    let verdict = parse_verdict(payload.verdict.as_deref().unwrap_or("PENDING"))?;
     let language = payload.language.as_deref();
 
-    let id = match payload.submission_id {
-        Some(submission_id) => {
-            enyay::insert_submission_with_id(
-                &state.pool,
-                submission_id,
-                payload.user_id,
-                payload.problem_id,
-                verdict,
-                payload.runtime_ms,
-                payload.memory_kb,
-                language,
-                &payload.source_code,
-            )
-            .await?;
-
-            submission_id
-        }
-        None => {
-            enyay::insert_submission(
+    let id = enyay::insert_submission(
                 &state.pool,
                 payload.user_id,
                 payload.problem_id,
-                verdict,
-                payload.runtime_ms,
-                payload.memory_kb,
+                enyay::Verdict::Pending,
+                None,
+                None,
                 language,
                 &payload.source_code,
-            )
-            .await?
-        }
-    };
-
-    let submission = enyay::get_submission(&state.pool, id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("submission {id} not found!")))?;
-    let state_clone = state.clone();
-
-    tokio::spawn(async move{
-        if let Ok(_permit) = state_clone.judge_limit.acquire().await{
-            if let Err(error) = judge::judge_submission(&submission,&state_clone).await{
-                eprintln!("Judge Failure, Submission: {}, Error: {error}", submission.submission_id);
-                let _ = enyay::update_submission_verdict(
-                    &state_clone.pool, 
-                    submission.submission_id, 
-                    enyay::Verdict::JudgeFailure, 
-                    None, 
-                    None
-                ).await;
-            }
-        } else{
-            eprintln!("Failed to generate permit for judge request");
-        }
-    });
+    )
+    .await?;
 
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
 }
@@ -460,6 +413,7 @@ async  fn get_recent_submissions_by_user(
     Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
 }
 
+//this should be deleted since the queue now handles judge
 async fn judge_submission(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
@@ -522,8 +476,22 @@ async fn main() -> Result<(), ApiError> {
 
     let cleared = enyay::cleanup_submissions(&pool).await;
     match cleared{
-        Ok(count) => eprintln!("{} stale submissions skipped and marked JF", count),
+        Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
         Err(_) => eprintln!("failed to cleanup stale submissions")
+    }
+
+    let app_state = AppState{
+        pool, 
+        judge_volume, 
+        judge_limit: Arc::new(Semaphore::new(1))
+    };
+
+    let worker_count = 1;
+    for _ in 0..worker_count{
+        let worker_state = app_state.clone();
+        tokio::spawn(async move{
+            judge::judge_worker_loop(worker_state).await;
+        });
     }
 
     let app = Router::new()
@@ -561,11 +529,7 @@ async fn main() -> Result<(), ApiError> {
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
         )
-        .with_state(AppState{ 
-            pool, 
-            judge_volume,
-            judge_limit: Arc::new(Semaphore::new(1))
-        });
+        .with_state(app_state);
 
     let addr = bind_addr
         .parse::<SocketAddr>()

@@ -74,7 +74,8 @@ pub enum Verdict {
     MemoryLimitExceeded,
     RunTimeError,
     CompileError,
-    JudgeFailure
+    JudgeFailure,
+    Judging
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,7 +83,7 @@ pub struct ParseVerdictError;
 
 impl fmt::Display for ParseVerdictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("expected one of PENDING, AC, WA, TLE, MLE, RE, CE Or JF")
+        f.write_str("expected one of PENDING, JUDGING, AC, WA, TLE, MLE, RE, CE Or JF")
     }
 }
 
@@ -92,6 +93,7 @@ impl Verdict {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "PENDING",
+            Self::Judging => "JUDGING",
             Self::Accepted => "AC",
             Self::WrongAnswer => "WA",
             Self::TimeLimitExceeded => "TLE",
@@ -115,6 +117,7 @@ impl FromStr for Verdict {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "PENDING" => Ok(Self::Pending),
+            "JUDGING" => Ok(Self::Judging),
             "AC" => Ok(Self::Accepted),
             "WA" => Ok(Self::WrongAnswer),
             "TLE" => Ok(Self::TimeLimitExceeded),
@@ -423,7 +426,7 @@ pub async fn insert_submission(
     language: Option<&str>,
     source_code: &str,
 ) -> Result<i64, SubmissionError> {
-     let mut tx = pool.begin().await?;
+    let mut tx = pool.begin().await?;
 
     sqlx::query(
         r#"
@@ -439,7 +442,7 @@ pub async fn insert_submission(
     let pending_count:i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*) FROM submissions
-        WHERE user_id = ? AND verdict = 'PENDING'
+        WHERE user_id = ? AND (verdict = 'PENDING' OR verdict = 'JUDGING')
         "#
     )
     .bind(user_id)
@@ -555,47 +558,6 @@ sqlx::query_as::<_, SubmissionStatus>(
     .await
 }
 
-pub async fn insert_submission_with_id(
-    pool: &MySqlPool,
-    submission_id: i64,
-    user_id: i64,
-    problem_id: i64,
-    verdict: Verdict,
-    runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
-    language: Option<&str>,
-    source_code: &str,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        INSERT INTO submissions
-            (
-                submission_id,
-                user_id,
-                problem_id,
-                verdict,
-                runtime_ms,
-                memory_kb,
-                language,
-                source_code
-            )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(submission_id)
-    .bind(user_id)
-    .bind(problem_id)
-    .bind(verdict.as_str())
-    .bind(runtime_ms)
-    .bind(memory_kb)
-    .bind(language)
-    .bind(source_code)
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected())
-}
-
 pub async fn update_submission_verdict(
     pool: &MySqlPool,
     submission_id: i64,
@@ -620,19 +582,57 @@ pub async fn update_submission_verdict(
     Ok(result.rows_affected())
 }
 
-/* 
-Should only be called on startup.
-If we implement queues, we won't
-need this anymore.
-*/
+pub async fn claim_next_pending(
+    pool: &MySqlPool,
+) -> Result<Option<Submission>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let pending_sub = sqlx::query_as::<_, Submission>(
+        r#"
+        SELECT
+            submission_id,
+            user_id,
+            problem_id,
+            verdict,
+            runtime_ms,
+            memory_kb,
+            language,
+            source_code
+        FROM submissions
+        WHERE verdict = 'PENDING'
+        ORDER BY submitted_time ASC, submission_id ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+        "#,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(sub) = &pending_sub{
+        sqlx::query(
+            r#"
+            UPDATE submissions
+            SET verdict = 'JUDGING'
+            WHERE submission_id = ?
+            "#
+        )
+        .bind(sub.submission_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(pending_sub)
+}
+
 pub async fn cleanup_submissions(
     pool: &MySqlPool
 ) -> Result<u64, sqlx::Error>{
     let result = sqlx::query(
         r#"
         UPDATE submissions
-        SET verdict = 'JF'
-        WHERE verdict = 'PENDING'
+        SET verdict = 'PENDING'
+        WHERE verdict = 'JUDGING'
         "#
     )
     .execute(pool)
