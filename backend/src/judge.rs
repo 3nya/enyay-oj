@@ -24,6 +24,17 @@ impl JudgeVolume{
         let whole_dir = std::env::current_dir().expect("Failed to retrieve current dir");
         let output_dir = whole_dir.join("user_inputs");
         let input_dir = whole_dir.join("test_cases");
+        
+        if input_dir.exists(){
+            if let Err(error)= std::fs::remove_dir_all(&input_dir){
+                eprintln!("Failed to cleanup input directory: {error}");
+            }
+        } 
+        if output_dir.exists(){
+            if let Err(error) = std::fs::remove_dir_all(&output_dir){
+                eprintln!("Failed to cleanup output directory: {error}");
+            }
+        }
         std::fs::create_dir_all(&input_dir)?;
         std::fs::create_dir_all(&output_dir)?;
 
@@ -144,8 +155,9 @@ pub async fn judge_submission(
             submission_results.metrics.peak_memory_kb = Some(0);
         }
     }
-    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
     let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
+    let _ = delete_file(&binary, &judge_volume.output_dir).await;
+    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
     Ok(submission_results)
 }
 
@@ -324,8 +336,11 @@ async fn compile_with_docker(
     if command.is_empty() {
         return Ok(ExitStatus::from_raw(0))
     }
-    let compile = Command::new("docker")
-        .args(["run","--rm"])
+    let compile = timeout(
+        Duration::from_secs(60),
+        Command::new("docker")
+        .args(["run","--rm", "--name",file_name])
+        .args(["--label", "enyay-oj-judge=true"])
         .args(["--network", "none"])
         .args(["--cap-drop", "ALL"])
         .args(["--security-opt", "no-new-privileges"])
@@ -335,8 +350,14 @@ async fn compile_with_docker(
         .arg(language.as_img())
         .args(command)
         .status()
-        .await?;
-    Ok(compile)
+    ).await;
+    let _ = kill_container(file_name).await;
+    if let Ok(compile_status) = compile{
+        let parsed_status = compile_status?;
+        return Ok(parsed_status);
+    }
+    //Works for unix platforms. Changes timeout to CE
+    Ok(ExitStatus::from_raw(1 << 8))
 }
 
 async fn run_with_docker(
