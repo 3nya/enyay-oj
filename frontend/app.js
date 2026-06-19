@@ -233,6 +233,7 @@ async function renderProblemset() {
 
   app.innerHTML = `
     <section class="panel">
+    <div class="table-scroll">
       <table class="general-table" aria-label="Problemset">
         <colgroup>
           <col style="width: 40%;">
@@ -267,6 +268,7 @@ async function renderProblemset() {
           }
         </tbody>
       </table>
+    </div>
     </section>
     <div class="page-number" aria-label="Problemset pagination">
       <a class="button secondary ${currentPage === 1 ? "disabled" : ""}" href="/problemset?page=${previousPage}" data-link>prev</a>
@@ -620,18 +622,21 @@ async function renderTable(){
             my only
         </label>
       </div>
-      <table class="general-table" aria-label="Status">
+      <div class="table-scroll">
+      <table class="general-table status-table" aria-label="Status">
         <colgroup>
-          <col style="width: 5%;">
-          <col style="width: 20%;">
-          <col style="width: 20%;">
-          <col style="width: 20%;">
-          <col style="width: 20%;">
-          <col style="width: 15%;">
+          <col style="width: 8%;">
+          <col style="width: 22%;">
+          <col style="width: 18%;">
+          <col style="width: 12%;">
+          <col style="width: 12%;">
+          <col style="width: 14%;">
+          <col style="width: 14%;">
         </colgroup>
         <thead>
           <tr>
             <th>problem</th>
+            <th>when</th>
             <th>who</th>
             <th>runtime</th>
             <th>memory</th>
@@ -647,6 +652,7 @@ async function renderTable(){
                     ({submission, status}) => `
                       <tr>
                         <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
+                        <td>${escapeHtml(submission.submitted_time)}</td>
                         <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
                         <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
                         <td>${escapeHtml(submission.memory_kb ?? "-")} KB</td>
@@ -656,10 +662,11 @@ async function renderTable(){
                     `,
                   )
                   .join("")
-              : `<tr><td class="empty-row" colspan="6">No submissions found.</td></tr>`
+              : `<tr><td class="empty-row" colspan="7">No submissions found.</td></tr>`
           }
         </tbody>
       </table>
+      </div>
     </section>
     <div class="page-number" aria-label="status pagination">
       <a class="button secondary ${currentPage === 1 ? "disabled" : ""}" href="${statusPath}?page=${previousPage}" data-link>prev</a>
