@@ -2,6 +2,7 @@ const app = document.querySelector("#app");
 const headerLogin = document.querySelector("#login-header");
 const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
 let statusRefreshTimer = null;
+let renderToken = 0;
 
 const state = {
   problems: [],
@@ -115,7 +116,9 @@ function renderLoading(label = "loading") {
   app.innerHTML = `<p class="status">${label}</p>`;
 }
 
-function renderError(error) {
+function renderError(error, token) {
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="panel">
       <div class="panel-header">
@@ -159,7 +162,9 @@ async function renderHeaderLogin(){
   }
 }
 
-async function renderHome() {
+async function renderHome(token) {
+  if(token != renderToken) return;
+
   renderLoading("loading homepage");
   const [problems, submissions] = await Promise.all([
     loadProblems().catch(() => []),
@@ -168,6 +173,8 @@ async function renderHome() {
 
   const recentProblems = problems.slice(0, 4);
   const recentSubmissions = submissions.slice(0, 5);
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
     <section class="home-grid home-grid-single">
@@ -219,7 +226,9 @@ async function renderHome() {
   `;
 }
 
-async function renderProblemset() {
+async function renderProblemset(token) {
+  if(token != renderToken) return;
+
   renderLoading("loading problemset");
   const problems = await loadProblems();
   const params = new URLSearchParams(window.location.search);
@@ -230,6 +239,8 @@ async function renderProblemset() {
   const visibleProblems = problems.slice(start, start + problemsPerPage);
   const previousPage = Math.max(1, currentPage - 1);
   const nextPage = Math.min(totalPages, currentPage + 1);
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
     <section class="panel">
@@ -278,15 +289,19 @@ async function renderProblemset() {
   `;
 }
 
-async function renderProblem(problemId){
+async function renderProblem(problemId, token){
+  if(token != renderToken) return;
+
   renderLoading("loading problem")
   const problem = await findProblem(problemId);
   if(!problem){
-    renderPlaceholder("Problem does not exist");
+    renderPlaceholder("Problem does not exist","",token);
     return;
   }
 
   const example = await findExample(problemId);
+
+  if(token != renderToken) return;
 
     app.innerHTML = `
     <section class="general-layout">
@@ -395,7 +410,9 @@ async function findProblem(problemId) {
   return problems[0] || null;
 }
 
-async function renderSubmit(problemId) {
+async function renderSubmit(problemId, token) {
+  if(token != renderToken) return;
+
   renderLoading("loading submit page");
   const [problem, problems] = await Promise.all([
     findProblem(problemId),
@@ -403,6 +420,8 @@ async function renderSubmit(problemId) {
   ]);
 
   const selectedId = problem?.problem_id ?? problems[0]?.problem_id ?? "";
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
     <section class="submit-layout">
@@ -561,14 +580,16 @@ async function submitSolution(event) {
   }
 }
 
-async function renderStatus(){
+async function renderStatus(token){
+  if(token != renderToken) return;
+
   renderLoading("loading status");
   stopRefresh()
-  const shouldPull = await renderTable();
+  const shouldPull = await renderTable(token);
 
   if(shouldPull){
     statusRefreshTimer = setInterval( async () => {
-      const shouldContinue = await renderTable().catch((error) =>{
+      const shouldContinue = await renderTable(token).catch((error) =>{
         console.error(error);
         return false;
       });
@@ -577,7 +598,12 @@ async function renderStatus(){
   }
 }
 
-async function renderTable(){
+async function renderTable(token){
+  if(token != renderToken){
+    stopRefresh();
+    return;
+  }
+
   let myOnly = window.location.pathname === "/status/my"
   if(!myOnly) state.submissions = [];
   else state.userSubmissions = [];
@@ -613,6 +639,11 @@ async function renderTable(){
     else if(submission.verdict === "PENDING" || submission.verdict === "JUDGING") status = "status pending";
     return {submission, status};
   })
+
+  if(token != renderToken){
+    stopRefresh();
+    return;
+  }
 
   app.innerHTML = `
     <section class="panel">
@@ -698,7 +729,9 @@ function stopRefresh(){
   }
 }
 
-function renderPlaceholder(title, body) {
+function renderPlaceholder(title, body, token) {
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="panel">
       <div class="panel-header">
@@ -709,7 +742,9 @@ function renderPlaceholder(title, body) {
   `;
 }
 
-async function renderCreateUser(){
+async function renderCreateUser(token){
+  if(token != renderToken) return;
+
   if(!state.currentUser){
     navigate('/login');
     return;
@@ -720,6 +755,8 @@ async function renderCreateUser(){
     navigate(`/login`);
     return;
   }
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
       <section class="panel panel-username">
@@ -811,7 +848,9 @@ async function getUserById(id){
   }
 }
 
-async function renderLogin() {
+async function renderLogin(token) {
+  if(token != renderToken) return;
+
   const user = state.currentUser;
   let dbUser = null;
   if (user){
@@ -823,6 +862,9 @@ async function renderLogin() {
   } 
   const displayName = dbUser?.user_name || user?.displayName || user?.email || "signed-in user";
   const photoUrl = user?.photoURL;
+
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="login-layout">
       <div class="panel login-panel">
@@ -915,37 +957,39 @@ async function copyIdToken() {
 }
 
 async function render() {
+  const token = ++renderToken;
+
   const route = window.location.pathname;
   setActiveNav(route);
   if(!route.startsWith("/status")) stopRefresh()
 
   try {
     if (route === "/") {
-      await renderHome();
+      await renderHome(token);
     } else if (route === "/problemset") {
-      await renderProblemset();
+      await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){
-      await renderProblem(route.split("/")[3]);
+      await renderProblem(route.split("/")[3],token);
     } else if (route === "/submit") {
-      await renderSubmit(null);
+      await renderSubmit(null,token);
     } else if (route.startsWith("/submit/")) {
-      await renderSubmit(route.split("/")[2]);
+      await renderSubmit(route.split("/")[2],token);
     } else if (route.startsWith("/status")) {
-      await renderStatus();
+      await renderStatus(token);
     } else if (route === "/login") {
-      await renderLogin();
+      await renderLogin(token);
     } else if (route === "/login/users"){
-      await renderCreateUser();
+      await renderCreateUser(token);
     } else if (route === "/about") {
-      renderPlaceholder("about", "Enyay OJ is a local online judge for testing submitted solutions.");
+      renderPlaceholder("about", "Enyay OJ is a local online judge for testing submitted solutions.",token);
     } else {
-      renderPlaceholder("not found", "That page does not exist.");
+      renderPlaceholder("not found", "That page does not exist.", token);
     }
   } catch (error) {
-    renderError(error);
+    renderError(error, token);
   }
 
-  app.focus({ preventScroll: true });
+  if(token == renderToken) app.focus({ preventScroll: true });
 }
 
 document.addEventListener("click", (event) => {
