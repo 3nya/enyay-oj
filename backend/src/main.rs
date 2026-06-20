@@ -80,6 +80,9 @@ impl From<enyay::SubmissionError> for ApiError{
             enyay::SubmissionError::SubmissionLimitExceeded(message) =>{
                 return Self::BadRequest(message);
             }
+            enyay::SubmissionError::SubmissionCoolDown(message) => {
+                return Self::BadRequest(message);
+            }
             enyay::SubmissionError::TransactionFailed(err) =>{
                 return Self::Database(err)
             }

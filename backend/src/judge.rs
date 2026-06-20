@@ -14,12 +14,6 @@ pub struct JudgeVolume{
 }
  
 impl JudgeVolume{
-    /* 
-        Retrieves current dir based on where cargo run is executed. For this, to work
-        we need to execute in the backend dir
-
-        can be replaced with an absolute path
-     */
     pub fn new() -> io::Result<Self>{
         let whole_dir = std::env::current_dir().expect("Failed to retrieve current dir");
         let output_dir = whole_dir.join("user_inputs");
