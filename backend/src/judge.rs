@@ -1,9 +1,10 @@
-use tokio::{process::Command,fs,time::{timeout,Duration}};
+use tokio::{fs, process::Command, sync::{OwnedSemaphorePermit}, time::{Duration, timeout}};
 use std::{fmt::{self}, io, os::unix::process::ExitStatusExt, str::FromStr};
 use std::{path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
 use chrono::{DateTime, Utc};
-use crate::{AppState, enyay::*};
+use crate::{AppState, enyay::{self, *}};
 
+#[derive(Clone)]
 pub struct JudgeVolume{
     input_volume_mount: String,
     user_volume_mount: String,
@@ -13,16 +14,21 @@ pub struct JudgeVolume{
 }
  
 impl JudgeVolume{
-    /* 
-        Retrieves current dir based on where cargo run is executed. For this, to work
-        we need to execute in the backend dir
-
-        can be replaced with an absolute path
-     */
     pub fn new() -> io::Result<Self>{
         let whole_dir = std::env::current_dir().expect("Failed to retrieve current dir");
         let output_dir = whole_dir.join("user_inputs");
         let input_dir = whole_dir.join("test_cases");
+        
+        if input_dir.exists(){
+            if let Err(error)= std::fs::remove_dir_all(&input_dir){
+                eprintln!("Failed to cleanup input directory: {error}");
+            }
+        } 
+        if output_dir.exists(){
+            if let Err(error) = std::fs::remove_dir_all(&output_dir){
+                eprintln!("Failed to cleanup output directory: {error}");
+            }
+        }
         std::fs::create_dir_all(&input_dir)?;
         std::fs::create_dir_all(&output_dir)?;
 
@@ -67,20 +73,73 @@ pub struct SubmissionResults{
     pub metrics: Metric,
 }
 
+pub async fn judge_worker_loop(app_state: AppState){
+    loop{
+        let permit = match app_state.clone().judge_limit.acquire_owned().await{
+            Ok(permit) => permit,
+            Err(error) =>{
+                eprintln!("Failed to acquire judge permit: {error}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        };
+
+        match enyay::claim_next_pending(&app_state.pool).await{
+            Ok(Some(submission)) => spawn_task(submission, app_state.clone(), permit),
+            Ok(None) => {
+                drop(permit);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(error) => {
+                drop(permit);
+                eprintln!("queue claim failed: {error}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+pub fn spawn_task(
+    submission: Submission,
+    state: AppState,
+    permit:OwnedSemaphorePermit
+) {
+    tokio::spawn( async move{
+        //makes sure we don't drop the permit before we are done
+        let _permit = permit;
+        if let Err(error) = judge_submission(&submission, &state).await{
+            eprintln!("Judge Failure, Submission: {} Error: {error}", submission.submission_id);
+            let _ = enyay::update_submission_verdict(
+                &state.pool,
+                submission.submission_id,
+                enyay::Verdict::JudgeFailure,
+                None,
+                None
+            ).await;
+        }
+    });
+}
+
 pub async fn judge_submission(
     submission:&Submission, 
-    judge_volume: &JudgeVolume, 
     app_state: &AppState
-) -> Result<SubmissionResults,Box<dyn std::error::Error>> {
-    let problem = fetch_question(submission, app_state).await?;
+) -> Result<SubmissionResults,Box<dyn std::error::Error + Send + Sync>> {
+    let judge_volume = &app_state.judge_volume;
 
-    let language = fetch_language(submission).await?;
+    let problem =  fetch_question(submission, app_state).await?;
+    let language = fetch_language(submission)?;
 
     let source_code_file = format!("prob_{}_code_submission_{}{}",problem.problem_id,submission.submission_id,language.as_exten());
     write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await?;
 
     let binary = format!("prob_{}_{}.out",problem.problem_id,submission.submission_id);
-    let compile_status = compile_with_docker(&binary, &source_code_file, language, judge_volume).await?;
+    let compile_status = match compile_with_docker(&binary, &source_code_file, language, judge_volume).await{
+        Ok(status) => status,
+        Err(err) => {
+            let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
+            return Err(Box::new(err));
+        }
+    };
     
 
     let mut submission_results: SubmissionResults;
@@ -95,8 +154,14 @@ pub async fn judge_submission(
             submission_results.metrics.peak_memory_kb = Some(0);
         }
     }
-    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
-    let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
+
+    let (_,_) = tokio::join!(
+        delete_file(&source_code_file, &judge_volume.output_dir),
+        delete_file(&binary, &judge_volume.output_dir),
+    );
+
+    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb)
+    .await?;
     Ok(submission_results)
 }
 
@@ -243,8 +308,12 @@ async fn validate_sol(
     let output = timeout(Duration::from_secs(2), validator.wait_with_output())
         .await
         .map_err(|_| DockerError{});
-    let _ = kill_container(validator_file).await;
-    let _ = delete_file(&output_file, &judge_volume.output_dir).await;
+
+    let (_,_) = tokio::join!(
+        kill_container(validator_file),
+        delete_file(&output_file, &judge_volume.output_dir),
+    );
+
     let output = output??;
     if output.status.code() == Some(0) {
         return Ok(true);
@@ -275,8 +344,11 @@ async fn compile_with_docker(
     if command.is_empty() {
         return Ok(ExitStatus::from_raw(0))
     }
-    let compile = Command::new("docker")
-        .args(["run","--rm"])
+    let compile = timeout(
+        Duration::from_secs(60),
+        Command::new("docker")
+        .args(["run","--rm", "--name",file_name])
+        .args(["--label", "enyay-oj-judge=true"])
         .args(["--network", "none"])
         .args(["--cap-drop", "ALL"])
         .args(["--security-opt", "no-new-privileges"])
@@ -286,8 +358,14 @@ async fn compile_with_docker(
         .arg(language.as_img())
         .args(command)
         .status()
-        .await?;
-    Ok(compile)
+    ).await;
+    let _ = kill_container(file_name).await;
+    if let Ok(compile_status) = compile{
+        let parsed_status = compile_status?;
+        return Ok(parsed_status);
+    }
+    //Works for unix platforms. Changes timeout to CE
+    Ok(ExitStatus::from_raw(1 << 8))
 }
 
 async fn run_with_docker(
@@ -434,10 +512,12 @@ async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
     fs::remove_file(path).await?;
     Ok(())
 }
-async fn cleanup(input_file:&str, binary_file: &str, validator_file:&str, output_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
-    let _ = delete_file(input_file, &judge_volume.input_dir).await;
-    let _ = delete_file(binary_file, &judge_volume.output_dir).await;
 
+async fn cleanup(input_file:&str, binary_file: &str, validator_file:&str, output_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
+    let (_,_) = tokio::join!(
+        delete_file(input_file, &judge_volume.input_dir),
+        delete_file(binary_file, &judge_volume.output_dir)
+    );
 
     if fs::try_exists(judge_volume.output_dir.join(validator_file)).await.unwrap_or(false) {
         let _ = delete_file(validator_file, &judge_volume.output_dir).await;
@@ -459,7 +539,7 @@ async fn fetch_question(submission:&Submission, app_state: &AppState) -> Result<
     Ok(problem)
 }
 
-async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotSupportedError>{
+fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotSupportedError>{
     let language;
     match &submission.language{
         Some(lang) => language = lang,
