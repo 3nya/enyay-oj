@@ -126,15 +126,20 @@ pub async fn judge_submission(
 ) -> Result<SubmissionResults,Box<dyn std::error::Error + Send + Sync>> {
     let judge_volume = &app_state.judge_volume;
 
-    let problem = fetch_question(submission, app_state).await?;
-
-    let language = fetch_language(submission).await?;
+    let problem =  fetch_question(submission, app_state).await?;
+    let language = fetch_language(submission)?;
 
     let source_code_file = format!("prob_{}_code_submission_{}{}",problem.problem_id,submission.submission_id,language.as_exten());
     write_out_to_file(&submission.source_code, &judge_volume.output_dir, &source_code_file).await?;
 
     let binary = format!("prob_{}_{}.out",problem.problem_id,submission.submission_id);
-    let compile_status = compile_with_docker(&binary, &source_code_file, language, judge_volume).await?;
+    let compile_status = match compile_with_docker(&binary, &source_code_file, language, judge_volume).await{
+        Ok(status) => status,
+        Err(err) => {
+            let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
+            return Err(Box::new(err));
+        }
+    };
     
 
     let mut submission_results: SubmissionResults;
@@ -149,9 +154,14 @@ pub async fn judge_submission(
             submission_results.metrics.peak_memory_kb = Some(0);
         }
     }
-    let _ = delete_file(&source_code_file, &judge_volume.output_dir).await;
-    let _ = delete_file(&binary, &judge_volume.output_dir).await;
-    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb).await?;
+
+    let (_,_) = tokio::join!(
+        delete_file(&source_code_file, &judge_volume.output_dir),
+        delete_file(&binary, &judge_volume.output_dir),
+    );
+
+    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb)
+    .await?;
     Ok(submission_results)
 }
 
@@ -298,8 +308,12 @@ async fn validate_sol(
     let output = timeout(Duration::from_secs(2), validator.wait_with_output())
         .await
         .map_err(|_| DockerError{});
-    let _ = kill_container(validator_file).await;
-    let _ = delete_file(&output_file, &judge_volume.output_dir).await;
+
+    let (_,_) = tokio::join!(
+        kill_container(validator_file),
+        delete_file(&output_file, &judge_volume.output_dir),
+    );
+
     let output = output??;
     if output.status.code() == Some(0) {
         return Ok(true);
@@ -498,10 +512,12 @@ async fn delete_file(file_name:&str, path: &PathBuf) -> io::Result<()>{
     fs::remove_file(path).await?;
     Ok(())
 }
-async fn cleanup(input_file:&str, binary_file: &str, validator_file:&str, output_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
-    let _ = delete_file(input_file, &judge_volume.input_dir).await;
-    let _ = delete_file(binary_file, &judge_volume.output_dir).await;
 
+async fn cleanup(input_file:&str, binary_file: &str, validator_file:&str, output_file: &str, judge_volume: &JudgeVolume) -> io::Result<()>{
+    let (_,_) = tokio::join!(
+        delete_file(input_file, &judge_volume.input_dir),
+        delete_file(binary_file, &judge_volume.output_dir)
+    );
 
     if fs::try_exists(judge_volume.output_dir.join(validator_file)).await.unwrap_or(false) {
         let _ = delete_file(validator_file, &judge_volume.output_dir).await;
@@ -523,7 +539,7 @@ async fn fetch_question(submission:&Submission, app_state: &AppState) -> Result<
     Ok(problem)
 }
 
-async fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotSupportedError>{
+fn fetch_language(submission:&Submission) -> Result<Language, LanguageNotSupportedError>{
     let language;
     match &submission.language{
         Some(lang) => language = lang,

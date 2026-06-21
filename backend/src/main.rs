@@ -482,10 +482,13 @@ async fn main() -> Result<(), ApiError> {
         .await?;
     println!("connected to database");
 
-    judge::cleanup_containers().await?;
+    let (container_cleanup, cleared) = tokio::join!(
+        judge::cleanup_containers(),
+        enyay::cleanup_submissions(&pool)
+    );
+    container_cleanup?;
     let judge_volume = judge::JudgeVolume::new()?;
 
-    let cleared = enyay::cleanup_submissions(&pool).await;
     match cleared{
         Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
         Err(_) => eprintln!("failed to cleanup stale submissions")
