@@ -27,7 +27,6 @@ enum ApiError {
     NotFound(String),
     Database(sqlx::Error),
     Io(std::io::Error),
-    Judge(String),
 }
 
 impl IntoResponse for ApiError {
@@ -47,13 +46,6 @@ impl IntoResponse for ApiError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "server request failed".to_string(),
-                )
-            }
-            Self::Judge(error) => {
-                eprintln!("judge error: {error}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("judge failed: {error}"),
                 )
             }
         };
@@ -78,6 +70,9 @@ impl From<enyay::SubmissionError> for ApiError{
     fn from(error: enyay::SubmissionError) -> Self{
         match error {
             enyay::SubmissionError::SubmissionLimitExceeded(message) =>{
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::SubmissionCoolDown(message) => {
                 return Self::BadRequest(message);
             }
             enyay::SubmissionError::TransactionFailed(err) =>{
@@ -413,18 +408,34 @@ async  fn get_recent_submissions_by_user(
     Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
 }
 
-//this should be deleted since the queue now handles judge
-async fn judge_submission(
+//maybe we can use this for a future admin panel to manually rejudge specific submissions
+async fn rejudge_submission(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let submission = enyay::get_submission(&state.pool, submission_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
-
-    judge::judge_submission(&submission, &state)
-        .await
-        .map_err(|error| ApiError::Judge(error.to_string()))?;
+    match enyay::get_submission(&state.pool, submission_id).await?{
+        Some(submission) => {
+            if submission.verdict != "PENDING" && submission.verdict != "JUDGING"{
+                enyay::update_submission_verdict(
+                    &state.pool, 
+                    submission_id, 
+                    enyay::Verdict::Pending, 
+                    None, 
+                    None
+                )
+                .await
+                .map_err(|_| ApiError::BadRequest(
+                    format!("Failed to rejudge submission {submission_id}. Are you sure it exists?")
+                ))?;
+            } else{
+                return Err(
+                    ApiError::BadRequest("You cannot rejudge a submission that is currently being judged!"
+                    .to_string()
+                ));
+            }
+        }
+        None => return Err(ApiError::NotFound(format!("Submission {} does not exist!",submission_id)))
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -471,10 +482,13 @@ async fn main() -> Result<(), ApiError> {
         .await?;
     println!("connected to database");
 
-    judge::cleanup_containers().await?;
+    let (container_cleanup, cleared) = tokio::join!(
+        judge::cleanup_containers(),
+        enyay::cleanup_submissions(&pool)
+    );
+    container_cleanup?;
     let judge_volume = judge::JudgeVolume::new()?;
 
-    let cleared = enyay::cleanup_submissions(&pool).await;
     match cleared{
         Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
         Err(_) => eprintln!("failed to cleanup stale submissions")
@@ -523,7 +537,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
-        .route("/submissions/{submission_id}/judge", post(judge_submission))
+        .route("/submissions/{submission_id}/judge", post(rejudge_submission))
         .route("/submissions/recent/{user_id}", get(get_recent_submissions_by_user))
         .route(
             "/submissions/{submission_id}/verdict",

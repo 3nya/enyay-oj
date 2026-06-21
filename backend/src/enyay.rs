@@ -206,6 +206,7 @@ impl FromStr for Language{
 pub enum SubmissionError{
     SubmissionLimitExceeded(String),
     TransactionFailed(sqlx::Error),
+    SubmissionCoolDown(String),
 }
 
 impl From<sqlx::Error> for SubmissionError {
@@ -448,10 +449,25 @@ pub async fn insert_submission(
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
-
     if pending_count > 0 {
         return Err(SubmissionError::SubmissionLimitExceeded(
             format!("User {} already has ongoing submissions!", user_id)
+        ));
+    }
+
+    let cooldown_count:i64 = sqlx::query_scalar(
+        r#"
+            SELECT COUNT(*) FROM submissions
+            WHERE user_id = ?
+            AND submitted_time >= NOW() - INTERVAL 10 SECOND
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if cooldown_count > 0{
+        return Err(SubmissionError::SubmissionCoolDown(
+            "Slow down! You are submitting too often!".to_string()
         ));
     }
 
