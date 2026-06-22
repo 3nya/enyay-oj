@@ -1,9 +1,10 @@
-use tokio::{process::Command,fs,time::{timeout,Duration}};
+use tokio::{fs, process::Command, sync::{OwnedSemaphorePermit}, time::{Duration, timeout}};
 use std::{fmt::{self}, io, os::unix::process::ExitStatusExt, str::FromStr};
 use std::{path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
 use chrono::{DateTime, Utc};
-use crate::{AppState, enyay::*};
+use crate::{AppState, enyay::{self, *}};
 
+#[derive(Clone)]
 pub struct JudgeVolume{
     input_volume_mount: String,
     user_volume_mount: String,
@@ -67,11 +68,59 @@ pub struct SubmissionResults{
     pub metrics: Metric,
 }
 
+pub async fn judge_worker_loop(app_state: AppState){
+    loop{
+        let permit = match app_state.clone().judge_limit.acquire_owned().await{
+            Ok(permit) => permit,
+            Err(error) =>{
+                eprintln!("Failed to acquire judge permit: {error}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        };
+
+        match enyay::claim_next_pending(&app_state.pool).await{
+            Ok(Some(submission)) => spawn_task(submission, app_state.clone(), permit),
+            Ok(None) => {
+                drop(permit);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(error) => {
+                drop(permit);
+                eprintln!("queue claim failed: {error}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+pub fn spawn_task(
+    submission: Submission,
+    state: AppState,
+    permit:OwnedSemaphorePermit
+) {
+    tokio::spawn( async move{
+        //makes sure we don't drop the permit before we are done
+        let _permit = permit;
+        if let Err(error) = judge_submission(&submission, &state).await{
+            eprintln!("Judge Failure, Submission: {} Error: {error}", submission.submission_id);
+            let _ = enyay::update_submission_verdict(
+                &state.pool,
+                submission.submission_id,
+                enyay::Verdict::JudgeFailure,
+                None,
+                None
+            ).await;
+        }
+    });
+}
+
 pub async fn judge_submission(
     submission:&Submission, 
-    judge_volume: &JudgeVolume, 
     app_state: &AppState
-) -> Result<SubmissionResults,Box<dyn std::error::Error>> {
+) -> Result<SubmissionResults,Box<dyn std::error::Error + Send + Sync>> {
+    let judge_volume = &app_state.judge_volume;
+
     let problem = fetch_question(submission, app_state).await?;
 
     let language = fetch_language(submission).await?;
