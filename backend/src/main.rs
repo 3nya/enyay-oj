@@ -1,7 +1,7 @@
 mod enyay;
 mod judge;
 
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -12,13 +12,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
-use tokio::net::TcpListener;
-
-use crate::{enyay::Verdict};
+use tokio::{net::TcpListener, sync::Semaphore};
 
 #[derive(Clone)]
 struct AppState {
     pool: MySqlPool,
+    judge_volume: judge::JudgeVolume,
+    judge_limit:Arc<Semaphore>
 }
 
 #[derive(Debug)]
@@ -27,7 +27,6 @@ enum ApiError {
     NotFound(String),
     Database(sqlx::Error),
     Io(std::io::Error),
-    Judge(String),
 }
 
 impl IntoResponse for ApiError {
@@ -49,13 +48,6 @@ impl IntoResponse for ApiError {
                     "server request failed".to_string(),
                 )
             }
-            Self::Judge(error) => {
-                eprintln!("judge error: {error}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("judge failed: {error}"),
-                )
-            }
         };
 
         (status, Json(ErrorResponse { error: message })).into_response()
@@ -73,6 +65,23 @@ impl From<std::io::Error> for ApiError {
         Self::Io(error)
     }
 }
+
+impl From<enyay::SubmissionError> for ApiError{
+    fn from(error: enyay::SubmissionError) -> Self{
+        match error {
+            enyay::SubmissionError::SubmissionLimitExceeded(message) =>{
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::SubmissionCoolDown(message) => {
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::TransactionFailed(err) =>{
+                return Self::Database(err)
+            }
+        }
+    }
+}
+
 
 #[derive(Serialize)]
 struct ErrorResponse {
@@ -114,12 +123,8 @@ struct CreateTestCaseRequest {
 
 #[derive(Deserialize)]
 struct CreateSubmissionRequest {
-    submission_id: Option<i64>,
     user_id: i64,
     problem_id: i64,
-    verdict: Option<String>,
-    runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
     language: Option<String>,
     source_code: String,
 }
@@ -335,21 +340,34 @@ async fn create_testcase(
     Ok((StatusCode::CREATED,Json(IdResponse { id })))
 }
 
+async fn get_problem_for_user(
+    State(state): State<AppState>,
+    Path((problem_id,user_id)): Path<(i64,i64)>,
+) -> Result<Json<enyay::PublicProblem>, ApiError> {
+    let problem = enyay::get_public_problem(&state.pool, problem_id,Some(user_id))
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
+    Ok(Json(problem))
+}
+
 async fn get_problem(
     State(state): State<AppState>,
     Path(problem_id): Path<i64>,
 ) -> Result<Json<enyay::PublicProblem>, ApiError> {
-    let problem = enyay::get_public_problem(&state.pool, problem_id)
+    let problem = enyay::get_public_problem(&state.pool, problem_id,None)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
-
     Ok(Json(problem))
 }
 
 async fn get_recent_problems(
     State(state): State<AppState>,
+    user_id: Option<Path<i64>>
 ) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError> {
-    Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?))
+    match user_id {
+        Some(Path(user_id)) => return Ok(Json(enyay::get_recent_problems(&state.pool,Some(user_id), 20).await?)),
+        None => return Ok(Json(enyay::get_recent_problems(&state.pool,None, 20).await?))
+    }
 }
 
 async fn create_submission(
@@ -362,40 +380,19 @@ async fn create_submission(
         ));
     }
 
-    let verdict = parse_verdict(payload.verdict.as_deref().unwrap_or("PENDING"))?;
     let language = payload.language.as_deref();
 
-    let id = match payload.submission_id {
-        Some(submission_id) => {
-            enyay::insert_submission_with_id(
-                &state.pool,
-                submission_id,
-                payload.user_id,
-                payload.problem_id,
-                verdict,
-                payload.runtime_ms,
-                payload.memory_kb,
-                language,
-                &payload.source_code,
-            )
-            .await?;
-
-            submission_id
-        }
-        None => {
-            enyay::insert_submission(
+    let id = enyay::insert_submission(
                 &state.pool,
                 payload.user_id,
                 payload.problem_id,
-                verdict,
-                payload.runtime_ms,
-                payload.memory_kb,
+                enyay::Verdict::Pending,
+                None,
+                None,
                 language,
                 &payload.source_code,
-            )
-            .await?
-        }
-    };
+    )
+    .await?;
 
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
 }
@@ -424,18 +421,34 @@ async  fn get_recent_submissions_by_user(
     Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
 }
 
-async fn judge_submission(
+//maybe we can use this for a future admin panel to manually rejudge specific submissions
+async fn rejudge_submission(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let submission = enyay::get_submission(&state.pool, submission_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
-
-    let judge_volume = judge::JudgeVolume::new()?;
-    judge::judge_submission(&submission, &judge_volume, &state)
-        .await
-        .map_err(|error| ApiError::Judge(error.to_string()))?;
+    match enyay::get_submission(&state.pool, submission_id).await?{
+        Some(submission) => {
+            if submission.verdict != "PENDING" && submission.verdict != "JUDGING"{
+                enyay::update_submission_verdict(
+                    &state.pool, 
+                    submission_id, 
+                    enyay::Verdict::Pending, 
+                    None, 
+                    None
+                )
+                .await
+                .map_err(|_| ApiError::BadRequest(
+                    format!("Failed to rejudge submission {submission_id}. Are you sure it exists?")
+                ))?;
+            } else{
+                return Err(
+                    ApiError::BadRequest("You cannot rejudge a submission that is currently being judged!"
+                    .to_string()
+                ));
+            }
+        }
+        None => return Err(ApiError::NotFound(format!("Submission {} does not exist!",submission_id)))
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -464,8 +477,8 @@ async fn update_submission_verdict(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
-    Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
+fn parse_verdict(value: &str) -> Result<enyay::Verdict, ApiError> {
+    enyay::Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
 }
 
 #[tokio::main]
@@ -481,7 +494,33 @@ async fn main() -> Result<(), ApiError> {
         .connect(&db_url)
         .await?;
     println!("connected to database");
-    judge::cleanup_containers().await?;
+
+    let (container_cleanup, cleared) = tokio::join!(
+        judge::cleanup_containers(),
+        enyay::cleanup_submissions(&pool)
+    );
+    container_cleanup?;
+    let judge_volume = judge::JudgeVolume::new()?;
+
+    match cleared{
+        Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
+        Err(_) => eprintln!("failed to cleanup stale submissions")
+    }
+
+    let app_state = AppState{
+        pool, 
+        judge_volume, 
+        judge_limit: Arc::new(Semaphore::new(1))
+    };
+
+    let worker_count = 1;
+    for _ in 0..worker_count{
+        let worker_state = app_state.clone();
+        tokio::spawn(async move{
+            judge::judge_worker_loop(worker_state).await;
+        });
+    }
+
     let app = Router::new()
         .route("/", get(frontend_index))
         .route("/problemset", get(frontend_index))
@@ -504,20 +543,22 @@ async fn main() -> Result<(), ApiError> {
         .route("/users/by-uid/{uid}", get(get_user_by_uid))
         .route("/users/{user_id}", get(get_user))
         .route("/problems", post(create_problem))
+        .route("/problems/all/{user_id}", get(get_recent_problems))
         .route("/problems/all", get(get_recent_problems))
+        .route("/problems/{problem_id}/{user_id}", get(get_problem_for_user))
         .route("/problems/{problem_id}", get(get_problem))
         .route("/problems/{problem_id}/example",get(get_example_test))
         .route("/problems/{problem_id}/testcases", post(create_testcase))
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
-        .route("/submissions/{submission_id}/judge", post(judge_submission))
+        .route("/submissions/{submission_id}/judge", post(rejudge_submission))
         .route("/submissions/recent/{user_id}", get(get_recent_submissions_by_user))
         .route(
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
         )
-        .with_state(AppState { pool });
+        .with_state(app_state);
 
     let addr = bind_addr
         .parse::<SocketAddr>()

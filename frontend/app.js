@@ -1,6 +1,8 @@
 const app = document.querySelector("#app");
 const headerLogin = document.querySelector("#login-header");
 const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
+let statusRefreshTimer = null;
+let renderToken = 0;
 
 const state = {
   problems: [],
@@ -59,16 +61,18 @@ function firebaseConfigReady() {
   return Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
 }
 
-function initFirebaseAuth() {
+async function initFirebaseAuth() {
   if (!window.firebase) {
     state.authReady = true;
     state.authError = "Firebase scripts did not load. Check your network connection.";
+    render()
     return;
   }
 
   if (!firebaseConfigReady()) {
     state.authReady = true;
     state.authError = "Firebase config is missing. Fill in ENYAY_FIREBASE_CONFIG in index.html.";
+    render()
     return;
   }
 
@@ -77,25 +81,31 @@ function initFirebaseAuth() {
       firebase.initializeApp(window.ENYAY_FIREBASE_CONFIG);
     }
 
-    firebase.auth().onAuthStateChanged((user) => {
+    firebase.auth().onAuthStateChanged(async (user) => {
       state.authReady = true;
       state.authError = null;
       state.currentUser = user;
-      if(!user) state.dbUser = null;
-      renderHeaderLogin()
-      if (window.location.pathname === "/login") {
-        render();
+      state.problems = [];
+      try{
+        if(!user) state.dbUser = null;
+        else await uidExists(user.uid);
+      } catch(error){
+        state.authError = error.message;
       }
+      await renderHeaderLogin()
+      render();
     });
   } catch (error) {
     state.authReady = true;
     state.authError = error.message;
+    render()
   }
 }
 
 async function loadProblems() {
   if (state.problems.length) return state.problems;
-  state.problems = await api("/problems/all");
+  if(state.dbUser) state.problems = await api(`/problems/all/${state.dbUser.user_id}`);
+  else state.problems = await api("/problems/all");
   return state.problems;
 }
 
@@ -114,7 +124,9 @@ function renderLoading(label = "loading") {
   app.innerHTML = `<p class="status">${label}</p>`;
 }
 
-function renderError(error) {
+function renderError(error, token) {
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="panel">
       <div class="panel-header">
@@ -126,10 +138,8 @@ function renderError(error) {
 }
 
 async function renderHeaderLogin(){
-  let dbUser = null;
-  if(state.currentUser){
-    dbUser = await uidExists(state.currentUser.uid);
-  }
+  let dbUser = state.dbUser;
+
   headerLogin.innerHTML = `
     ${
       dbUser ?
@@ -158,7 +168,9 @@ async function renderHeaderLogin(){
   }
 }
 
-async function renderHome() {
+async function renderHome(token) {
+  if(token != renderToken) return;
+
   renderLoading("loading homepage");
   const [problems, submissions] = await Promise.all([
     loadProblems().catch(() => []),
@@ -167,6 +179,14 @@ async function renderHome() {
 
   const recentProblems = problems.slice(0, 4);
   const recentSubmissions = submissions.slice(0, 5);
+  const rows = recentSubmissions.map( (submission) =>{
+    let status = "error-color";
+    if(submission.verdict === "AC") status = "success-color";
+    else if(submission.verdict === "PENDING" || submission.verdict === "JUDGING") status = "pending-color";
+    return {submission, status};
+  });
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
     <section class="home-grid home-grid-single">
@@ -200,13 +220,13 @@ async function renderHome() {
       </div>
       <ul class="recent-list">
         ${
-          recentSubmissions.length
-            ? recentSubmissions
+          rows.length
+            ? rows
                 .map(
-                  (submission) => `
+                  ({submission, status}) => `
                     <li>
                       submission ${escapeHtml(submission.submission_id)}
-                      <span> ${escapeHtml(submission.verdict)} on problem ${escapeHtml(submission.problem_id)}</span>
+                      <span> <span class = "${status}">${escapeHtml(submission.verdict)}</span> on problem ${escapeHtml(submission.problem_id)}</span>
                     </li>
                   `,
                 )
@@ -218,7 +238,9 @@ async function renderHome() {
   `;
 }
 
-async function renderProblemset() {
+async function renderProblemset(token) {
+  if(token != renderToken) return;
+
   renderLoading("loading problemset");
   const problems = await loadProblems();
   const params = new URLSearchParams(window.location.search);
@@ -230,8 +252,11 @@ async function renderProblemset() {
   const previousPage = Math.max(1, currentPage - 1);
   const nextPage = Math.min(totalPages, currentPage + 1);
 
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="panel">
+    <div class="table-scroll">
       <table class="general-table" aria-label="Problemset">
         <colgroup>
           <col style="width: 40%;">
@@ -254,7 +279,14 @@ async function renderProblemset() {
                   .map(
                     (problem) => `
                       <tr>
-                        <td><a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a></td>
+                        <td>
+                          <a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
+                          ${
+                            problem.accepted 
+                              ? `<span class="success-color checkmark" aria-hidden="true">&#10003;</span>`
+                              : ""
+                          }
+                        </td>
                         <td>${escapeHtml(problem.runtime_ms)} ms</td>
                         <td>${escapeHtml(problem.memory_mb)} MB</td>
                         <td>${escapeHtml(problem.problem_rating)}</td>
@@ -266,6 +298,7 @@ async function renderProblemset() {
           }
         </tbody>
       </table>
+    </div>
     </section>
     <div class="page-number" aria-label="Problemset pagination">
       <a class="button secondary ${currentPage === 1 ? "disabled" : ""}" href="/problemset?page=${previousPage}" data-link>prev</a>
@@ -275,15 +308,19 @@ async function renderProblemset() {
   `;
 }
 
-async function renderProblem(problemId){
+async function renderProblem(problemId, token){
+  if(token != renderToken) return;
+
   renderLoading("loading problem")
   const problem = await findProblem(problemId);
   if(!problem){
-    renderPlaceholder("Problem does not exist");
+    renderPlaceholder("Problem does not exist","",token);
     return;
   }
 
   const example = await findExample(problemId);
+
+  if(token != renderToken) return;
 
     app.innerHTML = `
     <section class="general-layout">
@@ -337,6 +374,12 @@ async function renderProblem(problemId){
             <dd>${escapeHtml(problem.memory_mb)} MB</dd>
             <dt>rating</dt>
             <dd>${escapeHtml(problem.problem_rating)}</dd>
+            <dt>status</dt>
+            ${
+              problem.accepted 
+              ?`<dd class="success-color">solved!</dd>`
+              :`<dd class="error-color">unsolved</dd>`
+            }
           </dl>
           <div class = "actions center-actions">
             <a class="button" href="/submit/${problem.problem_id}" data-link>submit</a>
@@ -382,7 +425,10 @@ async function findExample(problemId) {
 async function findProblem(problemId) {
   if (problemId) {
     try {
-      return await api(`/problems/${problemId}`);
+      if(state.dbUser){
+        return await api(`/problems/${problemId}/${state.dbUser.user_id}`);
+      }
+      else return await api(`/problems/${problemId}`);
     } catch {
       return null;
     }
@@ -392,7 +438,9 @@ async function findProblem(problemId) {
   return problems[0] || null;
 }
 
-async function renderSubmit(problemId) {
+async function renderSubmit(problemId, token) {
+  if(token != renderToken) return;
+
   renderLoading("loading submit page");
   const [problem, problems] = await Promise.all([
     findProblem(problemId),
@@ -400,6 +448,8 @@ async function renderSubmit(problemId) {
   ]);
 
   const selectedId = problem?.problem_id ?? problems[0]?.problem_id ?? "";
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
     <section class="submit-layout">
@@ -442,10 +492,6 @@ async function renderSubmit(problemId) {
           </div>
           <div class="actions">
             <button class="button" type="submit">submit</button>
-            <label class="checkline">
-              <input id="run-judge" type="checkbox" checked>
-              run judge
-            </label>
           </div>
           <div class="status" id="submit-status" role="status"></div>
         </div>
@@ -516,36 +562,34 @@ function enableTabs(textarea) {
 async function submitSolution(event) {
   const status = document.querySelector("#submit-status");
   event.preventDefault();
-  if(!state.currentUser){
-    status.textContent = "Please login";
-    status.className = "status error"
-    return;
-  }
 
   const form = event.currentTarget;
   const button = form.querySelector("button[type='submit']");
-  const runJudge = document.querySelector("#run-judge").checked;
   const data = new FormData(form);
 
   button.disabled = true;
   status.className = "status";
-  status.textContent = "creating submission";
+  status.textContent = "checking submission";
 
   try {
+    if(!state.currentUser){
+      status.textContent = "Please login";
+      status.className = "status error";
+      return;
+    }
     const user = await uidExists(state.currentUser.uid);
     if(!user){
       status.textContent = "Please create a username";
       status.className = "status error";
       return;
     }
+
+    status.textContent = "creating submission";
     const submission = await api("/submissions", {
       method: "POST",
       body: JSON.stringify({
         user_id: user.user_id,
         problem_id: Number(data.get("problem_id")),
-        verdict: "PENDING",
-        runtime_ms: null,
-        memory_kb: null,
         language: data.get("language"),
         source_code: data.get("source_code"),
       }),
@@ -554,12 +598,7 @@ async function submitSolution(event) {
     state.userSubmissions = [];
     state.submissions = [];
 
-    if (runJudge) {
-      status.textContent = `submission ${submission.id} created, running judge`;
-      await api(`/submissions/${submission.id}/judge`, { method: "POST" });
-    } else {
-      status.textContent = `submission ${submission.id} created`;
-    }
+    status.textContent = `submission ${submission.id} created, running judge`;
     navigate('/status/my');
   } catch (error) {
     status.className = "status error";
@@ -569,8 +608,34 @@ async function submitSolution(event) {
   }
 }
 
-async function renderStatus(myOnly){
+async function renderStatus(token){
+  if(token != renderToken) return;
+
   renderLoading("loading status");
+  stopRefresh()
+  const shouldPull = await renderTable(token);
+
+  if(shouldPull){
+    statusRefreshTimer = setInterval( async () => {
+      const shouldContinue = await renderTable(token).catch((error) =>{
+        console.error(error);
+        return false;
+      });
+      if(!shouldContinue) stopRefresh();
+    }, 3000);
+  }
+}
+
+async function renderTable(token){
+  if(token != renderToken){
+    stopRefresh();
+    return;
+  }
+
+  let myOnly = window.location.pathname === "/status/my"
+  if(!myOnly) state.submissions = [];
+  else state.userSubmissions = [];
+
   let submissions = null;
   if(myOnly && state.currentUser){
     const user = await uidExists(state.currentUser.uid);
@@ -599,9 +664,14 @@ async function renderStatus(myOnly){
   const rows = visibleSubmissions.map( (submission) => {
     let status = "status error";
     if(submission.verdict === "AC") status = "status success";
-    else if(submission.verdict === "PENDING") status = "status pending";
+    else if(submission.verdict === "PENDING" || submission.verdict === "JUDGING") status = "status pending";
     return {submission, status};
   })
+
+  if(token != renderToken){
+    stopRefresh();
+    return;
+  }
 
   app.innerHTML = `
     <section class="panel">
@@ -611,18 +681,21 @@ async function renderStatus(myOnly){
             my only
         </label>
       </div>
-      <table class="general-table" aria-label="Status">
+      <div class="table-scroll">
+      <table class="general-table status-table" aria-label="Status">
         <colgroup>
-          <col style="width: 5%;">
-          <col style="width: 20%;">
-          <col style="width: 20%;">
-          <col style="width: 20%;">
-          <col style="width: 20%;">
-          <col style="width: 15%;">
+          <col style="width: 8%;">
+          <col style="width: 22%;">
+          <col style="width: 18%;">
+          <col style="width: 12%;">
+          <col style="width: 12%;">
+          <col style="width: 14%;">
+          <col style="width: 14%;">
         </colgroup>
         <thead>
           <tr>
             <th>problem</th>
+            <th>when</th>
             <th>who</th>
             <th>runtime</th>
             <th>memory</th>
@@ -638,6 +711,7 @@ async function renderStatus(myOnly){
                     ({submission, status}) => `
                       <tr>
                         <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
+                        <td>${escapeHtml(submission.submitted_time)}</td>
                         <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
                         <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
                         <td>${escapeHtml(submission.memory_kb ?? "-")} KB</td>
@@ -647,10 +721,11 @@ async function renderStatus(myOnly){
                     `,
                   )
                   .join("")
-              : `<tr><td class="empty-row" colspan="6">No submissions found.</td></tr>`
+              : `<tr><td class="empty-row" colspan="7">No submissions found.</td></tr>`
           }
         </tbody>
       </table>
+      </div>
     </section>
     <div class="page-number" aria-label="status pagination">
       <a class="button secondary ${currentPage === 1 ? "disabled" : ""}" href="${statusPath}?page=${previousPage}" data-link>prev</a>
@@ -666,9 +741,25 @@ async function renderStatus(myOnly){
       navigate("/status");
     }
   });
+  return myOnly ? hasPending() : true;
 }
 
-function renderPlaceholder(title, body) {
+function hasPending(){
+  return state.userSubmissions.some((submission) => 
+    (submission.verdict === "PENDING" || submission.verdict === "JUDGING")
+  );
+}
+
+function stopRefresh(){
+  if(statusRefreshTimer){
+    clearInterval(statusRefreshTimer);
+    statusRefreshTimer = null;
+  }
+}
+
+function renderPlaceholder(title, body, token) {
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="panel">
       <div class="panel-header">
@@ -679,7 +770,9 @@ function renderPlaceholder(title, body) {
   `;
 }
 
-async function renderCreateUser(){
+async function renderCreateUser(token){
+  if(token != renderToken) return;
+
   if(!state.currentUser){
     navigate('/login');
     return;
@@ -690,6 +783,8 @@ async function renderCreateUser(){
     navigate(`/login`);
     return;
   }
+
+  if(token != renderToken) return;
 
   app.innerHTML = `
       <section class="panel panel-username">
@@ -781,7 +876,9 @@ async function getUserById(id){
   }
 }
 
-async function renderLogin() {
+async function renderLogin(token) {
+  if(token != renderToken) return;
+
   const user = state.currentUser;
   let dbUser = null;
   if (user){
@@ -793,6 +890,9 @@ async function renderLogin() {
   } 
   const displayName = dbUser?.user_name || user?.displayName || user?.email || "signed-in user";
   const photoUrl = user?.photoURL;
+
+  if(token != renderToken) return;
+
   app.innerHTML = `
     <section class="login-layout">
       <div class="panel login-panel">
@@ -862,6 +962,7 @@ async function signOut() {
     status.textContent = "signing out";
     await firebase.auth().signOut();
     state.userSubmissions = [];
+    state.problems = [];
     state.currentUser = null;
     state.dbUser = null;
   } catch (error) {
@@ -885,38 +986,39 @@ async function copyIdToken() {
 }
 
 async function render() {
+  const token = ++renderToken;
+
   const route = window.location.pathname;
   setActiveNav(route);
+  if(!route.startsWith("/status")) stopRefresh()
 
   try {
     if (route === "/") {
-      await renderHome();
+      await renderHome(token);
     } else if (route === "/problemset") {
-      await renderProblemset();
+      await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){
-      await renderProblem(route.split("/")[3]);
+      await renderProblem(route.split("/")[3],token);
     } else if (route === "/submit") {
-      await renderSubmit(null);
+      await renderSubmit(null,token);
     } else if (route.startsWith("/submit/")) {
-      await renderSubmit(route.split("/")[2]);
-    } else if (route === "/status") {
-      await renderStatus(false);
-    } else if(route === "/status/my"){
-      await renderStatus(true);
+      await renderSubmit(route.split("/")[2],token);
+    } else if (route.startsWith("/status")) {
+      await renderStatus(token);
     } else if (route === "/login") {
-      await renderLogin();
+      await renderLogin(token);
     } else if (route === "/login/users"){
-      await renderCreateUser();
+      await renderCreateUser(token);
     } else if (route === "/about") {
-      renderPlaceholder("about", "Enyay OJ is a local online judge for testing submitted solutions.");
+      renderPlaceholder("about", "Enyay OJ is a local online judge for testing submitted solutions.",token);
     } else {
-      renderPlaceholder("not found", "That page does not exist.");
+      renderPlaceholder("not found", "That page does not exist.", token);
     }
   } catch (error) {
-    renderError(error);
+    renderError(error, token);
   }
 
-  app.focus({ preventScroll: true });
+  if(token == renderToken) app.focus({ preventScroll: true });
 }
 
 document.addEventListener("click", (event) => {
@@ -935,6 +1037,5 @@ document.addEventListener("click", (event) => {
 });
 
 window.addEventListener("popstate", render);
+renderLoading("loading");
 initFirebaseAuth();
-render();
-renderHeaderLogin()

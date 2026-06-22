@@ -30,7 +30,8 @@ pub struct PublicProblem{
     pub memory_mb: i64,
     pub problem_rating: i32,
     pub problem_statement: String,
-    pub judge_type: String
+    pub judge_type: String,
+    pub accepted: bool
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -62,6 +63,7 @@ pub struct SubmissionStatus{
     pub runtime_ms: Option<i64>,
     pub memory_kb: Option<i64>,
     pub language: Option<String>,
+    pub submitted_time: String
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +75,8 @@ pub enum Verdict {
     MemoryLimitExceeded,
     RunTimeError,
     CompileError,
-    JudgeFailure
+    JudgeFailure,
+    Judging
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +84,7 @@ pub struct ParseVerdictError;
 
 impl fmt::Display for ParseVerdictError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("expected one of PENDING, AC, WA, TLE, MLE, RE, CE Or JF")
+        f.write_str("expected one of PENDING, JUDGING, AC, WA, TLE, MLE, RE, CE Or JF")
     }
 }
 
@@ -91,6 +94,7 @@ impl Verdict {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "PENDING",
+            Self::Judging => "JUDGING",
             Self::Accepted => "AC",
             Self::WrongAnswer => "WA",
             Self::TimeLimitExceeded => "TLE",
@@ -114,6 +118,7 @@ impl FromStr for Verdict {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "PENDING" => Ok(Self::Pending),
+            "JUDGING" => Ok(Self::Judging),
             "AC" => Ok(Self::Accepted),
             "WA" => Ok(Self::WrongAnswer),
             "TLE" => Ok(Self::TimeLimitExceeded),
@@ -195,6 +200,19 @@ impl FromStr for Language{
             "python3" => Ok(Self::PYTHON3_12),
             _ => Err(LanguageNotSupportedError)
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum SubmissionError{
+    SubmissionLimitExceeded(String),
+    TransactionFailed(sqlx::Error),
+    SubmissionCoolDown(String),
+}
+
+impl From<sqlx::Error> for SubmissionError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::TransactionFailed(error)
     }
 }
 
@@ -318,14 +336,26 @@ pub async fn get_problem(
 pub async fn get_public_problem(
     pool: &MySqlPool,
     problem_id: i64,
+    user_id: Option<i64>
 ) -> Result<Option<PublicProblem>, sqlx::Error> {
+    let user_id = user_id.unwrap_or(0);
+
     sqlx::query_as::<_, PublicProblem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type
-        FROM problems
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type,
+        EXISTS(
+            SELECT 1 FROM 
+            submissions s
+            WHERE p.problem_id = s.problem_id
+            AND s.user_id = ?
+            AND s.verdict ='AC'
+            LIMIT 1
+        ) AS accepted 
+        FROM problems p
         WHERE problem_id = ?
         "#,
     )
+    .bind(user_id)
     .bind(problem_id)
     .fetch_optional(pool)
     .await
@@ -333,16 +363,35 @@ pub async fn get_public_problem(
 
 pub async fn get_recent_problems(
     pool: &MySqlPool,
+    user_id: Option<i64>,
     limit: i64,
 ) -> Result<Vec<PublicProblem>, sqlx::Error> {
+    let user_id = user_id.unwrap_or(0);
+
     sqlx::query_as::<_, PublicProblem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type
-        FROM problems
-        ORDER BY problem_id ASC
-        LIMIT ?
+        SELECT 
+            p.problem_id, 
+            p.problem_name, 
+            p.runtime_ms, 
+            p.memory_mb,
+            p.problem_rating,
+            p.problem_statement,
+            p.judge_type,
+            Exists (
+                SELECT 1
+                FROM submissions s
+                WHERE s.problem_id = p.problem_id
+                    AND s.user_id = ?
+                    AND s.verdict = 'AC'
+                LIMIT 1
+            ) AS accepted
+        FROM problems p
+        ORDER BY p.problem_id DESC
+        LIMIT ?;
         "#,
     )
+    .bind(user_id)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -409,7 +458,51 @@ pub async fn insert_submission(
     memory_kb: Option<i64>,
     language: Option<&str>,
     source_code: &str,
-) -> Result<i64, sqlx::Error> {
+) -> Result<i64, SubmissionError> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+        SELECT user_id FROM users
+        WHERE user_id = ?
+        FOR UPDATE
+        "#
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let pending_count:i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM submissions
+        WHERE user_id = ? AND (verdict = 'PENDING' OR verdict = 'JUDGING')
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if pending_count > 0 {
+        return Err(SubmissionError::SubmissionLimitExceeded(
+            format!("User {} already has ongoing submissions!", user_id)
+        ));
+    }
+
+    let cooldown_count:i64 = sqlx::query_scalar(
+        r#"
+            SELECT COUNT(*) FROM submissions
+            WHERE user_id = ?
+            AND submitted_time >= NOW() - INTERVAL 10 SECOND
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if cooldown_count > 0{
+        return Err(SubmissionError::SubmissionCoolDown(
+            "Slow down! You are submitting too often!".to_string()
+        ));
+    }
+
     let result = sqlx::query(
         r#"
         INSERT INTO submissions
@@ -424,8 +517,10 @@ pub async fn insert_submission(
     .bind(memory_kb)
     .bind(language)
     .bind(source_code)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?; 
 
     Ok(last_insert_id(result))
 }
@@ -468,10 +563,11 @@ pub async fn get_recent_submissions(
             verdict,
             runtime_ms,
             memory_kb,
-            language
+            language,
+            DATE_FORMAT(submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
         FROM submissions s
         JOIN users u ON u.user_id = s.user_id
-        ORDER BY submitted_time DESC, submission_id DESC
+        ORDER BY s.submitted_time DESC, submission_id DESC
         LIMIT ?
         "#,
     )
@@ -495,11 +591,12 @@ sqlx::query_as::<_, SubmissionStatus>(
             verdict,
             runtime_ms,
             memory_kb,
-            language
+            language,
+            DATE_FORMAT(submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
         FROM submissions s
         JOIN users u ON u.user_id = s.user_id
         WHERE s.user_id = ?
-        ORDER BY submitted_time DESC, submission_id DESC
+        ORDER BY s.submitted_time DESC, submission_id DESC
         LIMIT ?
         "#,
     )
@@ -507,47 +604,6 @@ sqlx::query_as::<_, SubmissionStatus>(
     .bind(limit)
     .fetch_all(pool)
     .await
-}
-
-pub async fn insert_submission_with_id(
-    pool: &MySqlPool,
-    submission_id: i64,
-    user_id: i64,
-    problem_id: i64,
-    verdict: Verdict,
-    runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
-    language: Option<&str>,
-    source_code: &str,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        r#"
-        INSERT INTO submissions
-            (
-                submission_id,
-                user_id,
-                problem_id,
-                verdict,
-                runtime_ms,
-                memory_kb,
-                language,
-                source_code
-            )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(submission_id)
-    .bind(user_id)
-    .bind(problem_id)
-    .bind(verdict.as_str())
-    .bind(runtime_ms)
-    .bind(memory_kb)
-    .bind(language)
-    .bind(source_code)
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected())
 }
 
 pub async fn update_submission_verdict(
@@ -568,6 +624,65 @@ pub async fn update_submission_verdict(
     .bind(runtime_ms)
     .bind(memory_kb)
     .bind(submission_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+pub async fn claim_next_pending(
+    pool: &MySqlPool,
+) -> Result<Option<Submission>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let pending_sub = sqlx::query_as::<_, Submission>(
+        r#"
+        SELECT
+            submission_id,
+            user_id,
+            problem_id,
+            verdict,
+            runtime_ms,
+            memory_kb,
+            language,
+            source_code
+        FROM submissions
+        WHERE verdict = 'PENDING'
+        ORDER BY submitted_time ASC, submission_id ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+        "#,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(sub) = &pending_sub{
+        sqlx::query(
+            r#"
+            UPDATE submissions
+            SET verdict = 'JUDGING'
+            WHERE submission_id = ?
+            "#
+        )
+        .bind(sub.submission_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(pending_sub)
+}
+
+pub async fn cleanup_submissions(
+    pool: &MySqlPool
+) -> Result<u64, sqlx::Error>{
+    let result = sqlx::query(
+        r#"
+        UPDATE submissions
+        SET verdict = 'PENDING'
+        WHERE verdict = 'JUDGING'
+        "#
+    )
     .execute(pool)
     .await?;
 
