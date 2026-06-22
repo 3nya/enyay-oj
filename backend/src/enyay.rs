@@ -30,7 +30,8 @@ pub struct PublicProblem{
     pub memory_mb: i64,
     pub problem_rating: i32,
     pub problem_statement: String,
-    pub judge_type: String
+    pub judge_type: String,
+    pub accepted: bool
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -335,14 +336,26 @@ pub async fn get_problem(
 pub async fn get_public_problem(
     pool: &MySqlPool,
     problem_id: i64,
+    user_id: Option<i64>
 ) -> Result<Option<PublicProblem>, sqlx::Error> {
+    let user_id = user_id.unwrap_or(0);
+
     sqlx::query_as::<_, PublicProblem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type
-        FROM problems
+        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type,
+        EXISTS(
+            SELECT 1 FROM 
+            submissions s
+            WHERE p.problem_id = s.problem_id
+            AND s.user_id = ?
+            AND s.verdict ='AC'
+            LIMIT 1
+        ) AS accepted 
+        FROM problems p
         WHERE problem_id = ?
         "#,
     )
+    .bind(user_id)
     .bind(problem_id)
     .fetch_optional(pool)
     .await
@@ -350,16 +363,35 @@ pub async fn get_public_problem(
 
 pub async fn get_recent_problems(
     pool: &MySqlPool,
+    user_id: Option<i64>,
     limit: i64,
 ) -> Result<Vec<PublicProblem>, sqlx::Error> {
+    let user_id = user_id.unwrap_or(0);
+
     sqlx::query_as::<_, PublicProblem>(
         r#"
-        SELECT problem_id, problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type
-        FROM problems
-        ORDER BY problem_id ASC
-        LIMIT ?
+        SELECT 
+            p.problem_id, 
+            p.problem_name, 
+            p.runtime_ms, 
+            p.memory_mb,
+            p.problem_rating,
+            p.problem_statement,
+            p.judge_type,
+            Exists (
+                SELECT 1
+                FROM submissions s
+                WHERE s.problem_id = p.problem_id
+                    AND s.user_id = ?
+                    AND s.verdict = 'AC'
+                LIMIT 1
+            ) AS accepted
+        FROM problems p
+        ORDER BY p.problem_id DESC
+        LIMIT ?;
         "#,
     )
+    .bind(user_id)
     .bind(limit)
     .fetch_all(pool)
     .await

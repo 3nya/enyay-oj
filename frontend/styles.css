@@ -454,6 +454,23 @@ textarea {
   color: var(--muted)
 }
 
+.success-color {
+  color: var(--success);
+}
+
+.error-color {
+  color: var(--danger);
+}
+
+.pending-color{
+  color: var(--muted)
+}
+
+.success-color.checkmark {
+  font-weight: 800;
+  margin-left: 8px;
+}
+
 .recent-list {
   display: grid;
   gap: 8px;

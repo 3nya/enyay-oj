@@ -340,21 +340,34 @@ async fn create_testcase(
     Ok((StatusCode::CREATED,Json(IdResponse { id })))
 }
 
+async fn get_problem_for_user(
+    State(state): State<AppState>,
+    Path((problem_id,user_id)): Path<(i64,i64)>,
+) -> Result<Json<enyay::PublicProblem>, ApiError> {
+    let problem = enyay::get_public_problem(&state.pool, problem_id,Some(user_id))
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
+    Ok(Json(problem))
+}
+
 async fn get_problem(
     State(state): State<AppState>,
     Path(problem_id): Path<i64>,
 ) -> Result<Json<enyay::PublicProblem>, ApiError> {
-    let problem = enyay::get_public_problem(&state.pool, problem_id)
+    let problem = enyay::get_public_problem(&state.pool, problem_id,None)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
-
     Ok(Json(problem))
 }
 
 async fn get_recent_problems(
     State(state): State<AppState>,
+    user_id: Option<Path<i64>>
 ) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError> {
-    Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?))
+    match user_id {
+        Some(Path(user_id)) => return Ok(Json(enyay::get_recent_problems(&state.pool,Some(user_id), 20).await?)),
+        None => return Ok(Json(enyay::get_recent_problems(&state.pool,None, 20).await?))
+    }
 }
 
 async fn create_submission(
@@ -530,7 +543,9 @@ async fn main() -> Result<(), ApiError> {
         .route("/users/by-uid/{uid}", get(get_user_by_uid))
         .route("/users/{user_id}", get(get_user))
         .route("/problems", post(create_problem))
+        .route("/problems/all/{user_id}", get(get_recent_problems))
         .route("/problems/all", get(get_recent_problems))
+        .route("/problems/{problem_id}/{user_id}", get(get_problem_for_user))
         .route("/problems/{problem_id}", get(get_problem))
         .route("/problems/{problem_id}/example",get(get_example_test))
         .route("/problems/{problem_id}/testcases", post(create_testcase))

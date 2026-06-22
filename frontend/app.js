@@ -61,16 +61,18 @@ function firebaseConfigReady() {
   return Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
 }
 
-function initFirebaseAuth() {
+async function initFirebaseAuth() {
   if (!window.firebase) {
     state.authReady = true;
     state.authError = "Firebase scripts did not load. Check your network connection.";
+    render()
     return;
   }
 
   if (!firebaseConfigReady()) {
     state.authReady = true;
     state.authError = "Firebase config is missing. Fill in ENYAY_FIREBASE_CONFIG in index.html.";
+    render()
     return;
   }
 
@@ -79,25 +81,31 @@ function initFirebaseAuth() {
       firebase.initializeApp(window.ENYAY_FIREBASE_CONFIG);
     }
 
-    firebase.auth().onAuthStateChanged((user) => {
+    firebase.auth().onAuthStateChanged(async (user) => {
       state.authReady = true;
       state.authError = null;
       state.currentUser = user;
-      if(!user) state.dbUser = null;
-      renderHeaderLogin()
-      if (window.location.pathname === "/login") {
-        render();
+      state.problems = [];
+      try{
+        if(!user) state.dbUser = null;
+        else await uidExists(user.uid);
+      } catch(error){
+        state.authError = error.message;
       }
+      await renderHeaderLogin()
+      render();
     });
   } catch (error) {
     state.authReady = true;
     state.authError = error.message;
+    render()
   }
 }
 
 async function loadProblems() {
   if (state.problems.length) return state.problems;
-  state.problems = await api("/problems/all");
+  if(state.dbUser) state.problems = await api(`/problems/all/${state.dbUser.user_id}`);
+  else state.problems = await api("/problems/all");
   return state.problems;
 }
 
@@ -130,10 +138,8 @@ function renderError(error, token) {
 }
 
 async function renderHeaderLogin(){
-  let dbUser = null;
-  if(state.currentUser){
-    dbUser = await uidExists(state.currentUser.uid);
-  }
+  let dbUser = state.dbUser;
+
   headerLogin.innerHTML = `
     ${
       dbUser ?
@@ -173,6 +179,12 @@ async function renderHome(token) {
 
   const recentProblems = problems.slice(0, 4);
   const recentSubmissions = submissions.slice(0, 5);
+  const rows = recentSubmissions.map( (submission) =>{
+    let status = "error-color";
+    if(submission.verdict === "AC") status = "success-color";
+    else if(submission.verdict === "PENDING" || submission.verdict === "JUDGING") status = "pending-color";
+    return {submission, status};
+  });
 
   if(token != renderToken) return;
 
@@ -208,13 +220,13 @@ async function renderHome(token) {
       </div>
       <ul class="recent-list">
         ${
-          recentSubmissions.length
-            ? recentSubmissions
+          rows.length
+            ? rows
                 .map(
-                  (submission) => `
+                  ({submission, status}) => `
                     <li>
                       submission ${escapeHtml(submission.submission_id)}
-                      <span> ${escapeHtml(submission.verdict)} on problem ${escapeHtml(submission.problem_id)}</span>
+                      <span> <span class = "${status}">${escapeHtml(submission.verdict)}</span> on problem ${escapeHtml(submission.problem_id)}</span>
                     </li>
                   `,
                 )
@@ -267,7 +279,14 @@ async function renderProblemset(token) {
                   .map(
                     (problem) => `
                       <tr>
-                        <td><a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a></td>
+                        <td>
+                          <a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
+                          ${
+                            problem.accepted 
+                              ? `<span class="success-color checkmark" aria-hidden="true">&#10003;</span>`
+                              : ""
+                          }
+                        </td>
                         <td>${escapeHtml(problem.runtime_ms)} ms</td>
                         <td>${escapeHtml(problem.memory_mb)} MB</td>
                         <td>${escapeHtml(problem.problem_rating)}</td>
@@ -355,6 +374,12 @@ async function renderProblem(problemId, token){
             <dd>${escapeHtml(problem.memory_mb)} MB</dd>
             <dt>rating</dt>
             <dd>${escapeHtml(problem.problem_rating)}</dd>
+            <dt>status</dt>
+            ${
+              problem.accepted 
+              ?`<dd class="success-color">solved!</dd>`
+              :`<dd class="error-color">unsolved</dd>`
+            }
           </dl>
           <div class = "actions center-actions">
             <a class="button" href="/submit/${problem.problem_id}" data-link>submit</a>
@@ -400,7 +425,10 @@ async function findExample(problemId) {
 async function findProblem(problemId) {
   if (problemId) {
     try {
-      return await api(`/problems/${problemId}`);
+      if(state.dbUser){
+        return await api(`/problems/${problemId}/${state.dbUser.user_id}`);
+      }
+      else return await api(`/problems/${problemId}`);
     } catch {
       return null;
     }
@@ -934,6 +962,7 @@ async function signOut() {
     status.textContent = "signing out";
     await firebase.auth().signOut();
     state.userSubmissions = [];
+    state.problems = [];
     state.currentUser = null;
     state.dbUser = null;
   } catch (error) {
@@ -1008,6 +1037,5 @@ document.addEventListener("click", (event) => {
 });
 
 window.addEventListener("popstate", render);
+renderLoading("loading");
 initFirebaseAuth();
-render();
-renderHeaderLogin()
