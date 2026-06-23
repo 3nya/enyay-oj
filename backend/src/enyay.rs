@@ -1,6 +1,7 @@
 use std::{fmt::{self}, str::FromStr};
 
 use serde::Serialize;
+use chrono::Utc;
 use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -8,6 +9,16 @@ pub struct User {
     pub user_id: i64,
     pub user_name: String,
     pub auth_uid: String
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct Contest{
+    pub contest_id: i64,
+    pub contest_name: String,
+    pub host: String,
+    pub start_time: chrono::DateTime<Utc>,
+    pub end_time: chrono::DateTime<Utc>,
+    pub is_active: bool
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -287,6 +298,77 @@ pub async fn insert_user(pool: &MySqlPool, user_name: &str, auth_uid:&str) -> Re
 
     Ok(last_insert_id(result))
 }
+pub async fn create_contest(
+    pool: &MySqlPool,
+    contest_name: &str,
+    host: &str,
+    start_time: &chrono::DateTime<Utc>,
+    end_time: &chrono::DateTime<Utc>,
+) -> Result<i64, sqlx::Error>{
+    let result = sqlx::query(r#"
+        INSERT INTO contests (contest_name, host, start_time, end_time)
+        VALUES(?, ?, ?, ?)
+    "#)
+    .bind(contest_name)
+    .bind(host)
+    .bind(start_time)
+    .bind(end_time)
+    .execute(pool)
+    .await?;
+
+    Ok(last_insert_id(result))
+}
+
+pub async fn assign_contest_problems(
+    pool: &MySqlPool,
+    contest_id: i64,
+    problem_id: i64,
+    problem_order: &str,
+) -> Result<u64, sqlx::Error>{
+    let result = sqlx::query(r#"
+        INSERT IGNORE INTO contest_problems (contest_id, problem_id, problem_order)
+        VALUES(? , ? , ?)
+    "#)
+    .bind(contest_id)
+    .bind(problem_id)
+    .bind(problem_order)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+pub async fn register_contest(
+    pool: &MySqlPool,
+    contest_id: i64,
+    user_id: i64,
+) -> Result<u64, sqlx::Error>{
+    let result = sqlx::query(r#"
+        INSERT IGNORE INTO contest_registrations (contest_id, user_id)
+        VALUES (?, ?)
+    "#
+    )
+    .bind(contest_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+pub async fn get_contest(
+    pool: &MySqlPool,
+    contest_id: i64
+) -> Result<Option<Contest>, sqlx::Error>{
+    sqlx::query_as::<_,Contest>(r#"
+        SELECT contest_id, contest_name, host, start_time, end_time, is_active
+        FROM contests
+        WHERE contest_id = ?
+    "#)
+    .bind(contest_id)
+    .fetch_optional(pool)
+    .await
+}
 
 pub async fn insert_problem(
     pool: &MySqlPool,
@@ -296,12 +378,13 @@ pub async fn insert_problem(
     problem_rating: i32,
     problem_statement: &str,
     judge_type: &str,
-    validator_code: &str
+    validator_code: &str,
+    is_public: bool
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(
         r#"
-        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type, validator_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO problems (problem_name, runtime_ms, memory_mb, problem_rating, problem_statement, judge_type, validator_code, is_public)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(problem_name)
@@ -311,6 +394,7 @@ pub async fn insert_problem(
     .bind(problem_statement)
     .bind(judge_type)
     .bind(validator_code)
+    .bind(is_public)
     .execute(pool)
     .await?;
 
@@ -352,7 +436,7 @@ pub async fn get_public_problem(
             LIMIT 1
         ) AS accepted 
         FROM problems p
-        WHERE problem_id = ?
+        WHERE p.problem_id = ? AND p.is_public = TRUE
         "#,
     )
     .bind(user_id)
@@ -387,6 +471,7 @@ pub async fn get_recent_problems(
                 LIMIT 1
             ) AS accepted
         FROM problems p
+        WHERE p.is_public = TRUE
         ORDER BY p.problem_id DESC
         LIMIT ?;
         "#,

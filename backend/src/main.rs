@@ -4,12 +4,9 @@ mod judge;
 use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::{StatusCode, header},
-    response::{Html, IntoResponse, Response},
-    routing::{get, patch, post},
+    Json, Router, extract::{Path, State}, http::{StatusCode, header}, response::{Html, IntoResponse, Response}, routing::{get, patch, post},
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
 use tokio::{net::TcpListener, sync::Semaphore};
@@ -105,6 +102,14 @@ struct CreateUserRequest {
 }
 
 #[derive(Deserialize)]
+struct CreateContestRequest {
+    contest_name: String,
+    host: String,
+    start_time: chrono::DateTime<Utc>,
+    end_time: chrono::DateTime<Utc>
+}
+
+#[derive(Deserialize)]
 struct CreateProblemRequest {
     problem_name: String,
     runtime_ms: i64,
@@ -113,6 +118,7 @@ struct CreateProblemRequest {
     problem_statement: String,
     judge_type: String,
     validator_code: Option<String>,
+    is_public: bool
 }
 
 #[derive(Deserialize)]
@@ -313,7 +319,8 @@ async fn create_problem(
         payload.problem_rating,
         &payload.problem_statement,
         judge_type,
-        &validator_code
+        &validator_code,
+        payload.is_public
     )
     .await?;
 
@@ -367,6 +374,113 @@ async fn get_recent_problems(
     match user_id {
         Some(Path(user_id)) => return Ok(Json(enyay::get_recent_problems(&state.pool,Some(user_id), 20).await?)),
         None => return Ok(Json(enyay::get_recent_problems(&state.pool,None, 20).await?))
+    }
+}
+
+async fn create_contest(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateContestRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError>{
+    if payload.contest_name.is_empty() {
+        return Err(ApiError::BadRequest(
+            "contests must have a name!".to_string()
+        ))
+    }
+
+    if payload.start_time >= payload.end_time{
+        return Err(ApiError::BadRequest(
+            "contest start time must be before end time".to_string()
+        ));
+    }
+
+    let now = Utc::now();
+    if payload.start_time <= now{
+        return Err(ApiError::BadRequest(
+            "contests cannot be started before it has been created!".to_string()
+        ));
+    }
+    if payload.end_time <= now{
+        return Err(ApiError::BadRequest(
+            "contests cannot be finished before it is created!".to_string()
+        ));
+    }
+
+    let id = enyay::create_contest(
+        &state.pool, 
+        &payload.contest_name, 
+        &payload.host, 
+        &payload.start_time, 
+        &payload.end_time
+    ).await?;
+
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn assign_problem_to_contest(
+    State(state): State<AppState>,
+    Path((contest_id,problem_id,problem_order)): Path<(i64,i64,String)>
+) -> Result<StatusCode,ApiError> {
+    if problem_order.len() > 1 {
+        return Err(ApiError::BadRequest("problem order must be exactly 1 character, A-Z".to_string()));
+    }
+    for order_char in problem_order.chars(){
+        if !order_char.is_alphabetic(){
+            return Err(ApiError::BadRequest("problem order must be exactly 1 character, A-Z".to_string()));
+        }
+    }
+
+    let contest = enyay::get_contest(&state.pool, contest_id).await?;
+    let contest = match contest{
+        Some(existing_contest) => existing_contest,
+        None => return Err(ApiError::BadRequest(format!("contest {} does not exist",contest_id)))
+    };
+
+    let now = Utc::now();
+    if contest.start_time <= now{
+        return Err(ApiError::BadRequest("questions must be assigned before a contest begins!".to_string()));
+    }
+
+    match enyay::get_problem(&state.pool, problem_id).await?{
+        Some(_) => {
+            let affected = enyay::assign_contest_problems(&state.pool, contest_id, problem_id, &problem_order).await?;
+            if affected == 0{
+                return Err(ApiError::BadRequest(
+                    "problem order must be unique for each contest".to_string()
+                ));
+            }
+        }
+        None => return Err(ApiError::BadRequest(format!("problem {} does not exist!",problem_id)))
+    }
+
+    Ok(StatusCode::CREATED)
+}
+
+async fn register_contest(
+    State(state): State<AppState>,
+    Path((contest_id, user_id)): Path<(i64,i64)>
+) -> Result<StatusCode, ApiError> {
+    match enyay::get_contest(&state.pool, contest_id).await?{
+        Some(contest) => {
+            if Utc::now() < contest.start_time{
+                let affected = enyay::register_contest(&state.pool, contest_id, user_id).await?;
+                if affected >= 1{
+                    return Ok(StatusCode::CREATED);
+                } else{
+                    return Err(ApiError::BadRequest(
+                        format!("user {} already registered",user_id)
+                    ));
+                }
+            } else{
+                return Err(ApiError::BadRequest(
+                    "you cannot register a contest that has ended or is in progress".to_string()
+                ));
+            }
+        }
+        None =>{
+            return Err(ApiError::BadRequest(
+                format!("contest {} does not exist!",contest_id)
+            ))
+        }
     }
 }
 
@@ -558,6 +672,9 @@ async fn main() -> Result<(), ApiError> {
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
         )
+        .route("/contests/{contest_id}/registrations/{user_id}",post(register_contest))
+        .route("/contests/problems/{contest_id}/{problem_id}/{problem_order}", post(assign_problem_to_contest))
+        .route("/contests", post(create_contest))
         .with_state(app_state);
 
     let addr = bind_addr
