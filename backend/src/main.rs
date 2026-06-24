@@ -1,7 +1,7 @@
 mod enyay;
 mod judge;
 
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router, extract::{Path, State}, http::{StatusCode, header}, response::{Html, IntoResponse, Response}, routing::{get, patch, post},
@@ -505,8 +505,48 @@ async fn create_submission(
                 None,
                 language,
                 &payload.source_code,
+                None
     )
     .await?;
+
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn create_contest_submission(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>,
+    Json(payload): Json<CreateSubmissionRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError>{
+    let contest_requested = enyay::find_registered_contest(&state.pool, payload.user_id, contest_id).await?;
+    let contest = match contest_requested{
+        None => return Err(ApiError::BadRequest(format!("you did not register for contest {}",contest_id))),
+        Some(contest) => contest
+    };
+
+    let now = Utc::now();
+    if contest.start_time > now || contest.end_time <= now {
+        return Err(ApiError::BadRequest(
+            format!("contest {} is not currently active",contest_id)
+        ));
+    }
+
+    if !enyay::problem_in_contest(&state.pool, contest_id, payload.problem_id).await?{
+        return Err(ApiError::BadRequest(
+            format!("problem {} is not a part of contest {}", payload.problem_id, contest_id)
+        ));
+    }
+    
+    let id = enyay::insert_submission(
+        &state.pool, 
+        payload.user_id, 
+        payload.problem_id, 
+        enyay::Verdict::Pending, 
+        None, 
+        None, 
+        payload.language.as_deref(), 
+        &payload.source_code, 
+        Some(contest_id)
+    ).await?;
 
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
 }
@@ -635,6 +675,16 @@ async fn main() -> Result<(), ApiError> {
         });
     }
 
+    let contest_pool = app_state.pool.clone();
+    tokio::spawn(async move{
+        loop {
+            if let Err(error) = enyay::manage_contests(contest_pool.clone()).await{
+                eprintln!("contest activiation failed: {}", error);
+            }
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+
     let app = Router::new()
         .route("/", get(frontend_index))
         .route("/problemset", get(frontend_index))
@@ -674,6 +724,7 @@ async fn main() -> Result<(), ApiError> {
         )
         .route("/contests/{contest_id}/registrations/{user_id}",post(register_contest))
         .route("/contests/problems/{contest_id}/{problem_id}/{problem_order}", post(assign_problem_to_contest))
+        .route("/contests/{contest_id}/submissions", post(create_contest_submission))
         .route("/contests", post(create_contest))
         .with_state(app_state);
 

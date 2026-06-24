@@ -370,6 +370,93 @@ pub async fn get_contest(
     .await
 }
 
+pub async fn manage_contests(
+    pool: MySqlPool
+) -> Result<(),sqlx::Error>{
+    let mut tx = pool.begin().await?;
+    sqlx::query(r#"
+        UPDATE contests SET is_active = FALSE
+        WHERE is_active = TRUE 
+        AND end_time <= NOW()
+    "#)
+    .execute(&mut *tx)
+    .await?;
+
+    let contest_id = sqlx::query_scalar::<_,i64>(r#"
+        SELECT contest_id FROM contests
+        WHERE is_active = FALSE
+        AND start_time <= NOW()
+        AND end_time > NOW()
+        ORDER BY start_time ASC
+        LIMIT 1;
+    "#)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(contest) = contest_id{
+        sqlx::query(r#"
+            UPDATE contests SET is_active = TRUE
+            WHERE contest_id = ?
+        "#)
+        .bind(contest)
+        .execute(&mut *tx)
+        .await?;
+        
+        sqlx::query(r#"
+            UPDATE problems p
+            JOIN contest_problems c
+            ON p.problem_id = c.problem_id
+            SET p.is_public = TRUE
+            WHERE c.contest_id = ?
+        "#)
+        .bind(contest)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn find_registered_contest(
+    pool: &MySqlPool,
+    user_id: i64,
+    contest_id: i64
+) -> Result<Option<Contest>, sqlx::Error>{
+    sqlx::query_as::<_,Contest>(r#"
+        SELECT c.contest_id, c.contest_name, 
+        c.host, c.start_time, c.end_time, c.is_active
+        FROM contests c JOIN contest_registrations cr
+        ON c.contest_id = cr.contest_id
+        WHERE cr.user_id = ?
+        AND c.contest_id = ?
+        LIMIT 1
+    "#)
+    .bind(user_id)
+    .bind(contest_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn problem_in_contest(
+    pool: &MySqlPool,
+    contest_id: i64,
+    problem_id: i64
+) -> Result<bool,sqlx::Error>{
+    sqlx::query_scalar(r#"
+        SELECT EXISTS(
+            SELECT 1 
+            FROM contest_problems
+            WHERE contest_id = ?
+            AND problem_id = ?
+        )
+    "#)
+    .bind(contest_id)
+    .bind(problem_id)
+    .fetch_one(pool)
+    .await
+}
+
 pub async fn insert_problem(
     pool: &MySqlPool,
     problem_name: &str,
@@ -543,6 +630,7 @@ pub async fn insert_submission(
     memory_kb: Option<i64>,
     language: Option<&str>,
     source_code: &str,
+    contest_id: Option<i64>
 ) -> Result<i64, SubmissionError> {
     let mut tx = pool.begin().await?;
 
@@ -591,8 +679,8 @@ pub async fn insert_submission(
     let result = sqlx::query(
         r#"
         INSERT INTO submissions
-            (user_id, problem_id, verdict, runtime_ms, memory_kb, language, source_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (user_id, problem_id, verdict, runtime_ms, memory_kb, language, source_code, contest_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(user_id)
@@ -602,6 +690,7 @@ pub async fn insert_submission(
     .bind(memory_kb)
     .bind(language)
     .bind(source_code)
+    .bind(contest_id)
     .execute(&mut *tx)
     .await?;
 
@@ -731,9 +820,15 @@ pub async fn claim_next_pending(
             memory_kb,
             language,
             source_code
-        FROM submissions
+        FROM submissions s
+        LEFT JOIN contests c ON c.contest_id = s.contest_id
         WHERE verdict = 'PENDING'
-        ORDER BY submitted_time ASC, submission_id ASC
+        ORDER BY 
+            CASE 
+                WHEN c.is_active = TRUE THEN 0
+                ELSE 1
+            END,
+        submitted_time ASC, submission_id ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
         "#,
