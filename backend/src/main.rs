@@ -484,6 +484,16 @@ async fn register_contest(
     }
 }
 
+async fn get_contest_rankings(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::UserRanking>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
+    }
+    return Ok(Json(enyay::get_contest_rankings(&state.pool, contest_id, 20).await?))
+}
+
 async fn create_submission(
     State(state): State<AppState>,
     Json(payload): Json<CreateSubmissionRequest>,
@@ -586,6 +596,9 @@ async fn rejudge_submission(
                 enyay::update_submission_verdict(
                     &state.pool, 
                     submission_id, 
+                    None,
+                    None,
+                    None,
                     enyay::Verdict::Pending, 
                     None, 
                     None
@@ -616,6 +629,9 @@ async fn update_submission_verdict(
     let rows_affected = enyay::update_submission_verdict(
         &state.pool,
         submission_id,
+        None,
+        None,
+        None,
         verdict,
         payload.runtime_ms,
         payload.memory_kb,
@@ -725,6 +741,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/contests/{contest_id}/registrations/{user_id}",post(register_contest))
         .route("/contests/problems/{contest_id}/{problem_id}/{problem_order}", post(assign_problem_to_contest))
         .route("/contests/{contest_id}/submissions", post(create_contest_submission))
+        .route("/contests/{contest_id}/rankings",get(get_contest_rankings))
         .route("/contests", post(create_contest))
         .with_state(app_state);
 

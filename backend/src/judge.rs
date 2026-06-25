@@ -112,6 +112,9 @@ pub fn spawn_task(
             let _ = enyay::update_submission_verdict(
                 &state.pool,
                 submission.submission_id,
+                None,
+                None,
+                None,
                 enyay::Verdict::JudgeFailure,
                 None,
                 None
@@ -160,7 +163,16 @@ pub async fn judge_submission(
         delete_file(&binary, &judge_volume.output_dir),
     );
 
-    update_submission_verdict(&app_state.pool, submission.submission_id, submission_results.verdict, submission_results.metrics.runtime_ms, submission_results.metrics.peak_memory_kb)
+    update_submission_verdict(
+        &app_state.pool, 
+        submission.submission_id,
+        Some(submission.user_id),
+        submission.contest_id,
+        Some(submission.problem_id),
+        submission_results.verdict, 
+        submission_results.metrics.runtime_ms, 
+        submission_results.metrics.peak_memory_kb
+    )
     .await?;
     Ok(submission_results)
 }

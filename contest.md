@@ -48,3 +48,12 @@ ALTER TABLE submissions ADD FOREIGN KEY (contest_id) REFERENCES contests(contest
 ```sql
 ALTER TABLE problems ADD is_public BOOLEAN NOT NULL DEFAULT TRUE;
 ```
+
+### Indexes
+```sql
+CREATE INDEX idx_submissions_contest_user_problem_verdict
+ON submissions (contest_id, user_id, problem_id, verdict);
+
+CREATE INDEX idx_contest_rankings
+ON contest_registrations (contest_id, points DESC, penalty ASC);
+```

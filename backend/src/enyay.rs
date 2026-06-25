@@ -12,6 +12,13 @@ pub struct User {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
+pub struct UserRanking {
+    pub user_id: i64,
+    pub user_name: String,
+    pub points: i32
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Contest{
     pub contest_id: i64,
     pub contest_name: String,
@@ -56,6 +63,7 @@ pub struct TestCase {
 pub struct Submission {
     pub submission_id: i64,
     pub user_id: i64,
+    pub contest_id: Option<i64>,
     pub problem_id: i64,
     pub verdict: String,
     pub runtime_ms: Option<i64>,
@@ -708,6 +716,7 @@ pub async fn get_submission(
         SELECT
             submission_id,
             user_id,
+            contest_id,
             problem_id,
             verdict,
             runtime_ms,
@@ -783,10 +792,78 @@ sqlx::query_as::<_, SubmissionStatus>(
 pub async fn update_submission_verdict(
     pool: &MySqlPool,
     submission_id: i64,
+    user_id: Option<i64>,
+    contest_id: Option<i64>,
+    problem_id: Option<i64>,
     verdict: Verdict,
     runtime_ms: Option<i64>,
     memory_kb: Option<i64>,
 ) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    if let Some(user_id) = user_id 
+    && let Some(contest_id) = contest_id
+    && let Some(problem_id) = problem_id{
+        sqlx::query(r#"
+            SELECT user_id
+            FROM users
+            WHERE user_id = ?
+            FOR UPDATE;
+        "#)
+        .bind(user_id)
+        .execute(&mut * tx)
+        .await?;
+
+        let accepted: bool = sqlx::query_scalar(r#"
+            SELECT  EXISTS(
+                SELECT 1 FROM submissions
+                WHERE user_id = ? AND
+                problem_id = ? AND
+                contest_id = ? AND
+                submission_id <> ? AND
+                verdict = 'AC'
+            )
+        "#)
+        .bind(user_id)
+        .bind(problem_id)
+        .bind(contest_id)
+        .bind(submission_id)
+        .fetch_one(&mut * tx)
+        .await?;
+
+
+        if let Some(contest) = get_contest(pool, contest_id).await?{
+            
+            let mut points = 0;
+            let mut penalty= 0;
+            if !accepted{
+                if verdict == Verdict::Accepted{
+                    points = 1;
+                    penalty = (Utc::now()-contest.start_time).as_seconds_f32() as i32;     
+               } else if verdict != Verdict::JudgeFailure 
+               && verdict != Verdict::Pending
+               && verdict != Verdict::Judging{
+                    penalty += 1;
+               } 
+               if points != 0 || penalty != 0{
+                    sqlx::query(r#"
+                    UPDATE contest_registrations 
+                    SET points = points + ?,
+                    penalty = penalty + ?
+                    WHERE contest_id = ?
+                    AND user_id = ?
+                    "#)
+                    .bind(points)
+                    .bind(penalty)
+                    .bind(contest_id)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await?;
+               }
+            }
+        }
+    }
+
     let result = sqlx::query(
         r#"
         UPDATE submissions
@@ -798,10 +875,32 @@ pub async fn update_submission_verdict(
     .bind(runtime_ms)
     .bind(memory_kb)
     .bind(submission_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(result.rows_affected())
+}
+
+pub async fn get_contest_rankings(
+    pool: &MySqlPool,
+    contest_id: i64,
+    limit: i64,
+) -> Result<Vec<UserRanking>,sqlx::Error>{
+    sqlx::query_as::<_,UserRanking>(r#"
+        SELECT u.user_id, u.user_name, cr.points
+        FROM users u
+        JOIN contest_registrations cr 
+        ON u.user_id = cr.user_id
+        WHERE cr.contest_id = ?
+        ORDER BY 
+        cr.points DESC, cr.penalty ASC, u.user_id ASC
+        LIMIT ?
+    "#)
+    .bind(contest_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn claim_next_pending(
@@ -814,6 +913,7 @@ pub async fn claim_next_pending(
         SELECT
             submission_id,
             user_id,
+            s.contest_id,
             problem_id,
             verdict,
             runtime_ms,
