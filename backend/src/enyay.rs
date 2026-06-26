@@ -1,6 +1,6 @@
 use std::{fmt::{self}, str::FromStr};
 
-use serde::Serialize;
+use serde::{Serialize};
 use chrono::Utc;
 use sqlx::{FromRow, MySqlPool, mysql::MySqlQueryResult};
 
@@ -25,7 +25,8 @@ pub struct Contest{
     pub host: String,
     pub start_time: chrono::DateTime<Utc>,
     pub end_time: chrono::DateTime<Utc>,
-    pub is_active: bool
+    pub is_active: bool,
+    pub registered: bool
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -42,7 +43,7 @@ pub struct Problem {
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct PublicProblem{
-        pub problem_id: i64,
+    pub problem_id: i64,
     pub problem_name: String,
     pub runtime_ms: i64,
     pub memory_mb: i64,
@@ -346,6 +347,35 @@ pub async fn assign_contest_problems(
     Ok(result.rows_affected())
 }
 
+pub async fn get_contest_problems(
+    pool: &MySqlPool,
+    user_id: Option<i64>,
+    contest_id: i64
+) -> Result<Vec<PublicProblem>, sqlx::Error>{
+    let user_id = user_id.unwrap_or(0);
+
+    sqlx::query_as::<_,PublicProblem>(r#"
+        SELECT p.problem_id, p.problem_name, p.runtime_ms,
+        p.memory_mb, p.problem_rating, p.problem_statement,
+        p.judge_type, 
+        EXISTS(
+            SELECT 1 FROM submissions s
+            WHERE s.problem_id = p.problem_id
+            AND s.contest_id = cp.contest_id
+            AND s.user_id = ?
+            AND s.verdict = 'AC'
+        ) as accepted
+        FROM problems p JOIN contest_problems cp
+        ON p.problem_id = cp.problem_id
+        WHERE cp.contest_id = ?
+        ORDER BY cp.problem_order ASC
+    "#)
+    .bind(user_id)
+    .bind(contest_id)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn register_contest(
     pool: &MySqlPool,
     contest_id: i64,
@@ -366,15 +396,53 @@ pub async fn register_contest(
 
 pub async fn get_contest(
     pool: &MySqlPool,
-    contest_id: i64
+    contest_id: i64,
+    user_id: Option<i64>
 ) -> Result<Option<Contest>, sqlx::Error>{
+    let user_id = user_id.unwrap_or(0);
+
     sqlx::query_as::<_,Contest>(r#"
-        SELECT contest_id, contest_name, host, start_time, end_time, is_active
-        FROM contests
-        WHERE contest_id = ?
+        SELECT c.contest_id, c.contest_name, c.host, c.start_time, c.end_time, c.is_active, 
+        EXISTS(
+            SELECT 1 FROM contest_registrations cr
+            WHERE cr.user_id = ? 
+            AND cr.contest_id = c.contest_id
+        ) as registered
+        FROM contests c
+        WHERE c.contest_id = ?
     "#)
+    .bind(user_id)
     .bind(contest_id)
     .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_recent_contests(
+    pool: & MySqlPool,
+    user_id: Option<i64>,
+    limit: i32
+) -> Result<Vec<Contest>, sqlx::Error>{
+    let user_id = user_id.unwrap_or(0);
+
+    sqlx::query_as::<_,Contest>(r#"
+            SELECT c.contest_id, c.contest_name, c.host, c.start_time, c.end_time, c.is_active,
+                EXISTS(
+                SELECT 1 FROM contest_registrations cr
+                WHERE cr.user_id = ?
+                AND cr.contest_id = c.contest_id
+            ) as registered
+            FROM contests c
+            ORDER BY 
+            CASE 
+                WHEN is_active = TRUE THEN 0
+                ELSE 1
+            END ASC,
+            start_time DESC
+            LIMIT ?
+    "#)
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
     .await
 }
 
@@ -433,7 +501,7 @@ pub async fn find_registered_contest(
 ) -> Result<Option<Contest>, sqlx::Error>{
     sqlx::query_as::<_,Contest>(r#"
         SELECT c.contest_id, c.contest_name, 
-        c.host, c.start_time, c.end_time, c.is_active
+        c.host, c.start_time, c.end_time, c.is_active, TRUE as registered
         FROM contests c JOIN contest_registrations cr
         ON c.contest_id = cr.contest_id
         WHERE cr.user_id = ?
@@ -789,6 +857,65 @@ sqlx::query_as::<_, SubmissionStatus>(
     .await
 }
 
+pub async fn get_contest_submissions(
+    pool: & MySqlPool,
+    contest_id: i64,
+    limit: i32
+) -> Result<Vec<SubmissionStatus>, sqlx::Error>{
+    sqlx::query_as::<_,SubmissionStatus>(r#"
+        SELECT 
+        s.submission_id, 
+        s.user_id, 
+        u.user_name,
+        s.problem_id, 
+        s.verdict, 
+        s.runtime_ms, 
+        s.memory_kb,
+        s.language, 
+        DATE_FORMAT(s.submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
+        FROM submissions s JOIN users u
+        ON s.user_id = u.user_id
+        WHERE s.contest_id = ?
+        ORDER BY s.submitted_time DESC, s.submission_id DESC
+        LIMIT ?
+    "#)
+    .bind(contest_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_contest_user_submissions(
+    pool: &MySqlPool,
+    contest_id: i64,
+    user_id: i64, 
+    limit: i32
+) -> Result<Vec<SubmissionStatus>, sqlx::Error>{
+    sqlx::query_as::<_,SubmissionStatus>(r#"
+        SELECT 
+        s.submission_id, 
+        s.user_id, 
+        u.user_name,
+        s.problem_id, 
+        s.verdict, 
+        s.runtime_ms, 
+        s.memory_kb,
+        s.language,
+        DATE_FORMAT(s.submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
+        FROM submissions s JOIN users u
+        ON s.user_id = u.user_id
+        WHERE s.contest_id = ?
+        AND s.user_id = ?
+        ORDER BY s.submitted_time DESC, s.submission_id DESC
+        LIMIT ?
+    "#)
+    .bind(contest_id)
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn update_submission_verdict(
     pool: &MySqlPool,
     submission_id: i64,
@@ -832,7 +959,7 @@ pub async fn update_submission_verdict(
         .await?;
 
 
-        if let Some(contest) = get_contest(pool, contest_id).await?{
+        if let Some(contest) = get_contest(pool, contest_id, None).await?{
             
             let mut points = 0;
             let mut penalty= 0;
@@ -927,7 +1054,7 @@ pub async fn claim_next_pending(
             CASE 
                 WHEN c.is_active = TRUE THEN 0
                 ELSE 1
-            END,
+            END ASC,
         submitted_time ASC, submission_id ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED

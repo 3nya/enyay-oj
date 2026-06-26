@@ -5,6 +5,7 @@ let statusRefreshTimer = null;
 let renderToken = 0;
 
 const state = {
+  contests: [],
   problems: [],
   submissions: [],
   userSubmissions: [],
@@ -107,6 +108,13 @@ async function loadProblems() {
   if(state.dbUser) state.problems = await api(`/problems/all/${state.dbUser.user_id}`);
   else state.problems = await api("/problems/all");
   return state.problems;
+}
+
+async function loadContests(){
+  if(state.contests.length) return state.contests;
+  if(state.dbUser) state.contests = await api(`/contests/recent/${state.dbUser.user_id}`);
+  else state.contests = await api("/contests/recent");
+  return state.contests;
 }
 
 async function loadSubmissions() {
@@ -236,6 +244,44 @@ async function renderHome(token) {
       </ul>
     </section>
   `;
+}
+
+async function renderContests(token){
+  if(token != renderToken) return;
+  
+  renderLoading("loading contests");
+
+  const contests = await loadContests();
+  if(token != renderToken) return;
+/*
+This is a temporary UI for testing
+*/
+  app.innerHTML = `
+  <section class="home-grid home-grid-single">
+    <div class="panel">
+      <div class="panel-header">
+        <h1 class="panel-title">Contest</h1>
+        <a class="button secondary" href="/problemset" data-link>problemset</a>
+      </div>
+      <ul class="recent-list">
+        ${
+          contests.length
+            ? contests
+                .map(
+                  (contest) => `
+                    <li>
+                      <a href="/contests/${contest.contest_id}" data-link>${escapeHtml(contest.contest_name)}</a>
+                      <span> ${escapeHtml(contest.host)} host, ${escapeHtml(contest.start_time)} start time, ${escapeHtml(contest.is_active)} active</span>
+                    </li>
+                  `,
+                )
+                .join("")
+            : `<li>No contests returned by the backend yet.</li>`
+        }
+      </ul>
+    </div>
+  </section>
+`;
 }
 
 async function renderProblemset(token) {
@@ -995,6 +1041,8 @@ async function render() {
   try {
     if (route === "/") {
       await renderHome(token);
+    } else if(route === "/contests"){
+      await renderContests(token)
     } else if (route === "/problemset") {
       await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){

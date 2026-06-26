@@ -377,6 +377,26 @@ async fn get_recent_problems(
     }
 }
 
+async fn get_user_contest_problems(
+    State(state): State<AppState>,
+    Path((contest_id, user_id)): Path<(i64,i64)>
+) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,Some(user_id)).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
+    }
+    Ok(Json(enyay::get_contest_problems(&state.pool, Some(user_id),contest_id).await?))
+}
+
+async fn get_contest_problems(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,None).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
+    }
+    Ok(Json(enyay::get_contest_problems(&state.pool, None, contest_id).await?))
+}
+
 async fn create_contest(
     State(state): State<AppState>,
     Json(payload): Json<CreateContestRequest>
@@ -416,6 +436,19 @@ async fn create_contest(
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
 }
 
+async fn get_recent_contests(
+    State(state): State<AppState>
+) -> Result<Json<Vec<enyay::Contest>>, ApiError>{
+    Ok(Json(enyay::get_recent_contests(&state.pool, None,20).await?))
+}
+
+async fn get_recent_user_contests(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>
+) -> Result<Json<Vec<enyay::Contest>>, ApiError>{
+    Ok(Json(enyay::get_recent_contests(&state.pool, Some(user_id), 20).await?))
+}
+
 async fn assign_problem_to_contest(
     State(state): State<AppState>,
     Path((contest_id,problem_id,problem_order)): Path<(i64,i64,String)>
@@ -429,7 +462,7 @@ async fn assign_problem_to_contest(
         }
     }
 
-    let contest = enyay::get_contest(&state.pool, contest_id).await?;
+    let contest = enyay::get_contest(&state.pool, contest_id, None).await?;
     let contest = match contest{
         Some(existing_contest) => existing_contest,
         None => return Err(ApiError::BadRequest(format!("contest {} does not exist",contest_id)))
@@ -459,7 +492,7 @@ async fn register_contest(
     State(state): State<AppState>,
     Path((contest_id, user_id)): Path<(i64,i64)>
 ) -> Result<StatusCode, ApiError> {
-    match enyay::get_contest(&state.pool, contest_id).await?{
+    match enyay::get_contest(&state.pool, contest_id, Some(user_id)).await?{
         Some(contest) => {
             if Utc::now() < contest.start_time{
                 let affected = enyay::register_contest(&state.pool, contest_id, user_id).await?;
@@ -488,7 +521,7 @@ async fn get_contest_rankings(
     State(state): State<AppState>,
     Path(contest_id): Path<i64>
 ) -> Result<Json<Vec<enyay::UserRanking>>, ApiError>{
-    if enyay::get_contest(&state.pool, contest_id).await?.is_none(){
+    if enyay::get_contest(&state.pool, contest_id,None).await?.is_none(){
         return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
     }
     return Ok(Json(enyay::get_contest_rankings(&state.pool, contest_id, 20).await?))
@@ -582,7 +615,33 @@ async  fn get_recent_submissions_by_user(
     State(state): State<AppState>,
     Path(user_id): Path<i64>
 ) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
+    if enyay::get_user(&state.pool, user_id).await?.is_none(){
+        return Err(ApiError::NotFound(format!("user {} does not exist",user_id)));
+    }
     Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
+}
+
+async fn get_recent_contest_submissions(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,None).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist", contest_id)));
+    }
+    Ok(Json(enyay::get_contest_submissions(&state.pool, contest_id,20).await?))
+}
+
+async fn get_recent_user_contest_submission(
+    State(state): State<AppState>,
+    Path((contest_id,user_id)): Path<(i64,i64)>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,Some(user_id)).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist", contest_id)));
+    }
+    if enyay::get_user(&state.pool, user_id).await?.is_none(){
+        return Err(ApiError::NotFound(format!("user {} does not exist",user_id)));
+    }
+    Ok(Json(enyay::get_contest_user_submissions(&state.pool, contest_id, user_id, 20).await?))
 }
 
 //maybe we can use this for a future admin panel to manually rejudge specific submissions
@@ -703,6 +762,7 @@ async fn main() -> Result<(), ApiError> {
 
     let app = Router::new()
         .route("/", get(frontend_index))
+        .route("/contests", get(frontend_index))
         .route("/problemset", get(frontend_index))
         .route("/problemset/problem/{problem_id}", get(frontend_index))
         .route("/submit", get(frontend_index))
@@ -740,9 +800,15 @@ async fn main() -> Result<(), ApiError> {
         )
         .route("/contests/{contest_id}/registrations/{user_id}",post(register_contest))
         .route("/contests/problems/{contest_id}/{problem_id}/{problem_order}", post(assign_problem_to_contest))
+        .route("/contests/{contest_id}/submissions/recent/{user_id}",get(get_recent_user_contest_submission))
+        .route("/contests/{contest_id}/submissions/recent",get(get_recent_contest_submissions))
         .route("/contests/{contest_id}/submissions", post(create_contest_submission))
         .route("/contests/{contest_id}/rankings",get(get_contest_rankings))
-        .route("/contests", post(create_contest))
+        .route("/contests/{contest_id}/problemset/{user_id}", get(get_user_contest_problems))
+        .route("/contests/{contest_id}/problemset", get(get_contest_problems))
+        .route("/contests/recent/{user_id}", get(get_recent_user_contests))
+        .route("/contests/create", post(create_contest))
+        .route("/contests/recent", get(get_recent_contests))
         .with_state(app_state);
 
     let addr = bind_addr
