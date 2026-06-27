@@ -219,7 +219,8 @@ a {
 .general-table {
   width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;
+  min-width: 860px;
+  table-layout: auto;
 }
 
 .general-table th,
@@ -276,6 +277,39 @@ a {
 
 .status-table td:nth-child(2){
   color: var(--muted);
+  font-size: 16px;
+}
+
+.contest-table th,
+.contest-table td{
+  padding: 8px 10px;
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+.contest-table td:first-child,
+.contest-table th:first-child{
+  text-align: center;
+}
+
+.contest-table td:nth-child(3),
+.contest-table td:nth-child(4){
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.contest-table a{
+  color: var(--accent);
+}
+
+.contest-badge {
+  display: inline-flex;
+  min-width: 86px;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  color: var(--success);
   font-size: 16px;
 }
 

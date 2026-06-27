@@ -26,7 +26,8 @@ pub struct Contest{
     pub start_time: chrono::DateTime<Utc>,
     pub end_time: chrono::DateTime<Utc>,
     pub is_active: bool,
-    pub registered: bool
+    pub registered: bool,
+    pub registered_count: i64
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -83,7 +84,7 @@ pub struct SubmissionStatus{
     pub runtime_ms: Option<i64>,
     pub memory_kb: Option<i64>,
     pub language: Option<String>,
-    pub submitted_time: String
+    pub submitted_time: chrono::DateTime<Utc>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,7 +408,9 @@ pub async fn get_contest(
             SELECT 1 FROM contest_registrations cr
             WHERE cr.user_id = ? 
             AND cr.contest_id = c.contest_id
-        ) as registered
+        ) as registered,
+        (SELECT COUNT(*) FROM contest_registrations cr1
+        WHERE cr1.contest_id = c.contest_id) as registered_count
         FROM contests c
         WHERE c.contest_id = ?
     "#)
@@ -430,7 +433,9 @@ pub async fn get_recent_contests(
                 SELECT 1 FROM contest_registrations cr
                 WHERE cr.user_id = ?
                 AND cr.contest_id = c.contest_id
-            ) as registered
+            ) as registered,
+            (SELECT COUNT(*) FROM contest_registrations cr1
+            WHERE cr1.contest_id = c.contest_id) as registered_count
             FROM contests c
             ORDER BY 
             CASE 
@@ -501,7 +506,8 @@ pub async fn find_registered_contest(
 ) -> Result<Option<Contest>, sqlx::Error>{
     sqlx::query_as::<_,Contest>(r#"
         SELECT c.contest_id, c.contest_name, 
-        c.host, c.start_time, c.end_time, c.is_active, TRUE as registered
+        c.host, c.start_time, c.end_time, c.is_active, TRUE as registered,
+        (SELECT COUNT(*) FROM contest_registrations cr1 WHERE cr1.contest_id = c.contest_id) as registered_count
         FROM contests c JOIN contest_registrations cr
         ON c.contest_id = cr.contest_id
         WHERE cr.user_id = ?
@@ -815,7 +821,7 @@ pub async fn get_recent_submissions(
             runtime_ms,
             memory_kb,
             language,
-            DATE_FORMAT(submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
+            submitted_time
         FROM submissions s
         JOIN users u ON u.user_id = s.user_id
         ORDER BY s.submitted_time DESC, submission_id DESC
@@ -843,7 +849,7 @@ sqlx::query_as::<_, SubmissionStatus>(
             runtime_ms,
             memory_kb,
             language,
-            DATE_FORMAT(submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
+            submitted_time
         FROM submissions s
         JOIN users u ON u.user_id = s.user_id
         WHERE s.user_id = ?
@@ -872,7 +878,7 @@ pub async fn get_contest_submissions(
         s.runtime_ms, 
         s.memory_kb,
         s.language, 
-        DATE_FORMAT(s.submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
+        s.submitted_time
         FROM submissions s JOIN users u
         ON s.user_id = u.user_id
         WHERE s.contest_id = ?
@@ -901,7 +907,7 @@ pub async fn get_contest_user_submissions(
         s.runtime_ms, 
         s.memory_kb,
         s.language,
-        DATE_FORMAT(s.submitted_time, '%Y-%m-%d %H:%i:%s') AS submitted_time
+        s.submitted_time
         FROM submissions s JOIN users u
         ON s.user_id = u.user_id
         WHERE s.contest_id = ?

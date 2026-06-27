@@ -128,6 +128,39 @@ async function loadSubmissionsByUser(userId){
   return state.userSubmissions;
 }
 
+function getTimeZoneName(date) {
+  const parts = new Intl.DateTimeFormat(undefined, {
+    timeZoneName: "short",
+  }).formatToParts(date);
+
+  return parts.find((part) => part.type === "timeZoneName")?.value || "";
+}
+
+function formatDateTimeDetailed(time){
+  return new Date(time).toLocaleString(undefined,{
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short"
+  })
+}
+
+function formatDateTimeSum(time){
+  const date = new Date(time);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const second = String(date.getSeconds()).padStart(2, "0");
+  const zone = getTimeZoneName(date);
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second} ${zone}`;
+}
+
 function renderLoading(label = "loading") {
   app.innerHTML = `<p class="status">${label}</p>`;
 }
@@ -253,35 +286,167 @@ async function renderContests(token){
 
   const contests = await loadContests();
   if(token != renderToken) return;
+  const currentAndUpcoming = [];
+  const pastContests = [];
+  const currentTime = Date.now();
+  for(let i = 0; i < contests.length; i++){
+    let startTime = new Date(contests[i].start_time);
+    if(currentTime <= startTime.getTime() || contests[i].is_active){
+      currentAndUpcoming.push(contests[i]);
+    } else pastContests.push(contests[i]);
+  }
+
 /*
 This is a temporary UI for testing
 */
   app.innerHTML = `
-  <section class="home-grid home-grid-single">
+  <section class="home-grid home-grid-single table-scroll">
     <div class="panel">
       <div class="panel-header">
-        <h1 class="panel-title">Contest</h1>
-        <a class="button secondary" href="/problemset" data-link>problemset</a>
-      </div>
-      <ul class="recent-list">
-        ${
-          contests.length
-            ? contests
-                .map(
-                  (contest) => `
-                    <li>
-                      <a href="/contests/${contest.contest_id}" data-link>${escapeHtml(contest.contest_name)}</a>
-                      <span> ${escapeHtml(contest.host)} host, ${escapeHtml(contest.start_time)} start time, ${escapeHtml(contest.is_active)} active</span>
-                    </li>
-                  `,
-                )
-                .join("")
-            : `<li>No contests returned by the backend yet.</li>`
-        }
-      </ul>
+        <h1 class="panel-title">Current or upcoming contests</h1>
     </div>
+    <div>
+      <table class="general-table contest-table" aria-label="Upcoming and active contests">
+        <colgroup>
+          <col style="width: 25%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 15%;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Hosts</th>
+            <th>Start</th>
+            <th>End</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            currentAndUpcoming.length
+              ? currentAndUpcoming
+                  .map(
+                    (contest) => `
+                      <tr>
+                        <td><a href="/contests/${contest.contest_id}" data-link>${escapeHtml(contest.contest_name)}</a></td>
+                        <td>${escapeHtml(contest.host)}</td>
+                        <td>${escapeHtml(formatDateTimeDetailed(contest.start_time))}</td>
+                        <td>${escapeHtml(formatDateTimeDetailed(contest.end_time))}</td>
+                        <td>
+                          ${
+                            contest.is_active
+                              ? `<a href="/contests/${contest.contest_id}" data-link>enter</a>`
+                              : contest.registered
+                                ? `<span class="contest-badge registered">registered</span>`
+                                : `<a href="/contests/${contest.contest_id}/registration" data-link>register</a>`
+                          }
+                          <span>
+                            <span aria-hidden="true">&#128100;</span>
+                              ${escapeHtml(contest.registered_count)}
+                          </span>
+                        </td>
+                      </tr>
+                    `,
+                  )
+                  .join("")
+              : `<tr><td class="empty-row" colspan="5">No contests found.</td></tr>`
+          }
+        </tbody>
+      </table>
+      </div>
+      </div>
+  </section>
+  <br> 
+  <br>
+  <section class="home-grid home-grid-single table-scroll">
+    <div class="panel">
+      <div class="panel-header">
+        <h1 class="panel-title">Past contests</h1>
+    </div>
+    <div>
+      <table class="general-table contest-table" aria-label="Past Contests">
+        <colgroup>
+          <col style="width: 25%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 20%;">
+          <col style="width: 15%;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Hosts</th>
+            <th>Start</th>
+            <th>End</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            pastContests.length
+              ? pastContests
+                  .map(
+                    (contest) => `
+                      <tr>
+                        <td>
+                          <a href="/contests/${contest.contest_id}" data-link>${escapeHtml(contest.contest_name)}</a>
+                          ${
+                            contest.registered 
+                              ? `<span class="success-color checkmark" aria-hidden="true">&#10003;</span>`
+                              : ""
+                          }
+                        </td>
+                        <td>${escapeHtml(contest.host)}</td>
+                        <td>${escapeHtml(formatDateTimeDetailed(contest.start_time))}</td>
+                        <td>${escapeHtml(formatDateTimeDetailed(contest.end_time))}</td>
+                        <td><a href="/contests/${contest.contest_id}" data-link>view data</a> <span class="icon-person" aria-hidden="true">&#128100;</span> x ${escapeHtml(contest.registered_count)}</td>
+                      </tr>
+                    `,
+                  )
+                  .join("")
+              : `<tr><td class="empty-row" colspan="5">No contests found.</td></tr>`
+          }
+        </tbody>
+      </table>
+      </div>
+      </div>
   </section>
 `;
+}
+
+async function renderRegistration(contest_id,token){
+  if(token != renderToken) return;
+  app.innerHTML = `
+    <section class="panel">
+      <div class="panel-header">
+        <h1 class="panel-title">Contest ${escapeHtml(contest_id)} Registration</h1>
+        <a class="button secondary" href="/contests" data-link>Contests</a>
+      </div>
+      <p id="registration-message" class = "pending-color" style="padding: 0 14px 14px;">registering...</p>
+    </section>
+  `;
+
+  const message = document.querySelector("#registration-message");
+  if(!state.currentUser){
+    message.className = "status error";
+    message.textContent = "you are not logged in!";
+  } else if(!state.dbUser){
+    message.className = "status error";
+    message.textContent = "you must create a username!";
+  } else{
+    try{
+      await api(`/contests/${contest_id}/registrations/${state.dbUser.user_id}`,{
+        method: "POST",
+      });
+      message.className = "status success";
+      message.textContent = "You are registered!";
+    } catch(error){
+      message.className = "status error";
+      message.textContent = error;
+    }
+  }
 }
 
 async function renderProblemset(token) {
@@ -757,7 +922,7 @@ async function renderTable(token){
                     ({submission, status}) => `
                       <tr>
                         <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
-                        <td>${escapeHtml(submission.submitted_time)}</td>
+                        <td>${escapeHtml(formatDateTimeSum(submission.submitted_time))}</td>
                         <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
                         <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
                         <td>${escapeHtml(submission.memory_kb ?? "-")} KB</td>
@@ -1043,7 +1208,9 @@ async function render() {
       await renderHome(token);
     } else if(route === "/contests"){
       await renderContests(token)
-    } else if (route === "/problemset") {
+    } else if (/^\/contests\/\d+\/registration$/.test(route)){
+      await renderRegistration(route.split("/")[2],token);
+    }else if (route === "/problemset") {
       await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){
       await renderProblem(route.split("/")[3],token);

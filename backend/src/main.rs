@@ -762,6 +762,7 @@ async fn main() -> Result<(), ApiError> {
 
     let app = Router::new()
         .route("/", get(frontend_index))
+        .route("/contests/{contest_id}/registration",get(frontend_index))
         .route("/contests", get(frontend_index))
         .route("/problemset", get(frontend_index))
         .route("/problemset/problem/{problem_id}", get(frontend_index))
