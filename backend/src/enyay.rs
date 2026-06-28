@@ -15,7 +15,8 @@ pub struct User {
 pub struct UserRanking {
     pub user_id: i64,
     pub user_name: String,
-    pub points: i32
+    pub points: i32,
+    pub penalty: i32
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -51,7 +52,8 @@ pub struct PublicProblem{
     pub problem_rating: i32,
     pub problem_statement: String,
     pub judge_type: String,
-    pub accepted: bool
+    pub accepted: bool,
+    pub problem_order: Option<String>
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -365,7 +367,8 @@ pub async fn get_contest_problems(
             AND s.contest_id = cp.contest_id
             AND s.user_id = ?
             AND s.verdict = 'AC'
-        ) as accepted
+        ) as accepted,
+        cp.problem_order
         FROM problems p JOIN contest_problems cp
         ON p.problem_id = cp.problem_id
         WHERE cp.contest_id = ?
@@ -603,7 +606,8 @@ pub async fn get_public_problem(
             AND s.user_id = ?
             AND s.verdict ='AC'
             LIMIT 1
-        ) AS accepted 
+        ) AS accepted,
+        NULL AS problem_order 
         FROM problems p
         WHERE p.problem_id = ? AND p.is_public = TRUE
         "#,
@@ -638,7 +642,8 @@ pub async fn get_recent_problems(
                     AND s.user_id = ?
                     AND s.verdict = 'AC'
                 LIMIT 1
-            ) AS accepted
+            ) AS accepted,
+            NULL AS problem_order
         FROM problems p
         WHERE p.is_public = TRUE
         ORDER BY p.problem_id DESC
@@ -1021,7 +1026,7 @@ pub async fn get_contest_rankings(
     limit: i64,
 ) -> Result<Vec<UserRanking>,sqlx::Error>{
     sqlx::query_as::<_,UserRanking>(r#"
-        SELECT u.user_id, u.user_name, cr.points
+        SELECT u.user_id, u.user_name, cr.points, cr.penalty
         FROM users u
         JOIN contest_registrations cr 
         ON u.user_id = cr.user_id

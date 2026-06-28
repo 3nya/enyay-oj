@@ -117,6 +117,11 @@ async function loadContests(){
   return state.contests;
 }
 
+async function loadContestProblems(contestId){
+  if(!state.dbUser )return await api(`/contests/${contestId}/problemset`);
+    else return await api(`/contests/${contestId}/problemset/${state.dbUser.user_id}`);
+}
+
 async function loadSubmissions() {
   if (state.submissions.length) return state.submissions;
   state.submissions = await api("/submissions/recent");
@@ -296,9 +301,6 @@ async function renderContests(token){
     } else pastContests.push(contests[i]);
   }
 
-/*
-This is a temporary UI for testing
-*/
   app.innerHTML = `
   <section class="home-grid home-grid-single table-scroll">
     <div class="panel">
@@ -330,14 +332,14 @@ This is a temporary UI for testing
                   .map(
                     (contest) => `
                       <tr>
-                        <td><a href="/contests/${contest.contest_id}" data-link>${escapeHtml(contest.contest_name)}</a></td>
+                        <td>${escapeHtml(contest.contest_name)}</td>
                         <td>${escapeHtml(contest.host)}</td>
                         <td>${escapeHtml(formatDateTimeDetailed(contest.start_time))}</td>
                         <td>${escapeHtml(formatDateTimeDetailed(contest.end_time))}</td>
                         <td>
                           ${
                             contest.is_active
-                              ? `<a href="/contests/${contest.contest_id}" data-link>enter</a>`
+                              ? `<a href="/contests/${contest.contest_id}/home" data-link>enter</a>`
                               : contest.registered
                                 ? `<span class="contest-badge registered">registered</span>`
                                 : `<a href="/contests/${contest.contest_id}/registration" data-link>register</a>`
@@ -391,7 +393,7 @@ This is a temporary UI for testing
                     (contest) => `
                       <tr>
                         <td>
-                          <a href="/contests/${contest.contest_id}" data-link>${escapeHtml(contest.contest_name)}</a>
+                          ${escapeHtml(contest.contest_name)}
                           ${
                             contest.registered 
                               ? `<span class="success-color checkmark" aria-hidden="true">&#10003;</span>`
@@ -401,7 +403,7 @@ This is a temporary UI for testing
                         <td>${escapeHtml(contest.host)}</td>
                         <td>${escapeHtml(formatDateTimeDetailed(contest.start_time))}</td>
                         <td>${escapeHtml(formatDateTimeDetailed(contest.end_time))}</td>
-                        <td><a href="/contests/${contest.contest_id}" data-link>view data</a> <span class="icon-person" aria-hidden="true">&#128100;</span> x ${escapeHtml(contest.registered_count)}</td>
+                        <td><a href="/contests/${contest.contest_id}/finalranks" data-link>view data</a> <span class="icon-person" aria-hidden="true">&#128100;</span> ${escapeHtml(contest.registered_count)}</td>
                       </tr>
                     `,
                   )
@@ -416,12 +418,132 @@ This is a temporary UI for testing
 `;
 }
 
-async function renderRegistration(contest_id,token){
+async function renderContestHome(contestId, token){
+  if(token != renderToken) return;
+  renderLoading("loading contest")
+
+  let contestProblems = await loadContestProblems(contestId);
+  let ranks = await api(`/contests/${contestId}/rankings`);
+
+  if(token != renderToken) return;
+
+  app.innerHTML = `
+    <section class="submit-layout">
+    <div class="panel">
+      <div class="panel-header">
+          <h1 class="panel-title">Contest Problems</h1>
+          <a class="button secondary" href="/contests" data-link>contests</a>
+      </div>
+      <div class="table-scroll">
+        <table class="general-table contest-problemset-table" aria-label="Contest ${escapeHtml(contestId)} Problemset">
+          <colgroup>
+            <col style="width: 8%;">
+            <col style="width: 48%;">
+            <col style="width: 22%;">
+            <col style="width: 12%;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>problem</th>
+              <th>limits</th>
+              <th>rating</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              contestProblems.length
+                ? contestProblems
+                    .map(
+                      (problem,index) => `
+                        <tr>
+                          <td>
+                            ${
+                              problem.problem_order ?
+                              `${escapeHtml(problem.problem_order)}`
+                              : `${escapeHtml(String.fromCharCode(65 + index))}`
+                            }
+                          </td>
+                          <td>
+                            <a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
+                            ${
+                              problem.accepted 
+                                ? `<span class="success-color checkmark" aria-hidden="true">&#10003;</span>`
+                                : ""
+                            }
+                          </td>
+                          <td>${escapeHtml(problem.runtime_ms)} ms / ${escapeHtml(problem.memory_mb)} MB</td>
+                          <td>${escapeHtml(problem.problem_rating)}</td>
+                        </tr>
+                      `,
+                    )
+                    .join("")
+                : `<tr><td class="empty-row" colspan="4">No problems found.</td></tr>`
+            }
+          </tbody>
+        </table>
+        </div>
+      </div>
+      
+
+      <aside class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Ranking</h2>
+        </div>
+        <div class="general-summary">
+          <table class="general-table ranking-table" aria-label="Ranking">
+          <colgroup>
+            <col style="width: 10%;">
+            <col style="width: 40%;">
+            <col style="width: 25%;">
+            <col style="width: 25%;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>who</th>
+              <th>points</th>
+              <th>penalty</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              ranks.length
+                ? ranks
+                    .map(
+                      (rank,index) => `
+                        <tr>
+                          <td>${escapeHtml(index+1)}</td>
+                          <td class ="${index===0 ? "gold-color": ""}">
+                            ${
+                              index===0 
+                              ?  `<span aria-hidden="true">&#9819;</span>`
+                              :""
+                            }
+                            ${escapeHtml(rank.user_name)}
+                          </td>
+                          <td class="success-color">${escapeHtml(rank.points)}</td>
+                          <td class="error-color">${escapeHtml(rank.penalty)}</td>
+                        </tr>
+                      `,
+                    )
+                    .join("")
+                : `<tr><td class="empty-row" colspan="4">No contestants found.</td></tr>`
+            }
+          </tbody>
+        </table>
+        </div>
+      </aside>
+    </section>
+  `;
+}
+
+async function renderRegistration(contestId,token){
   if(token != renderToken) return;
   app.innerHTML = `
     <section class="panel">
       <div class="panel-header">
-        <h1 class="panel-title">Contest ${escapeHtml(contest_id)} Registration</h1>
+        <h1 class="panel-title">Contest ${escapeHtml(contestId)} Registration</h1>
         <a class="button secondary" href="/contests" data-link>Contests</a>
       </div>
       <p id="registration-message" class = "pending-color" style="padding: 0 14px 14px;">registering...</p>
@@ -437,7 +559,7 @@ async function renderRegistration(contest_id,token){
     message.textContent = "you must create a username!";
   } else{
     try{
-      await api(`/contests/${contest_id}/registrations/${state.dbUser.user_id}`,{
+      await api(`/contests/${contestId}/registrations/${state.dbUser.user_id}`,{
         method: "POST",
       });
       message.className = "status success";
@@ -1210,7 +1332,9 @@ async function render() {
       await renderContests(token)
     } else if (/^\/contests\/\d+\/registration$/.test(route)){
       await renderRegistration(route.split("/")[2],token);
-    }else if (route === "/problemset") {
+    } else if (/^\/contests\/\d+\/home$/.test(route)){
+      await renderContestHome(route.split("/")[2],token);
+    } else if (route === "/problemset") {
       await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){
       await renderProblem(route.split("/")[3],token);
