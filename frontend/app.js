@@ -465,7 +465,7 @@ async function renderContestHome(contestId, token){
                             }
                           </td>
                           <td>
-                            <a href="/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
+                            <a href="/contests/${contestId}/problemset/problem/${problem.problem_id}" data-link>${escapeHtml(problem.problem_name)}</a>
                             ${
                               problem.accepted 
                                 ? `<span class="success-color checkmark" aria-hidden="true">&#10003;</span>`
@@ -536,6 +536,102 @@ async function renderContestHome(contestId, token){
       </aside>
     </section>
   `;
+}
+
+async function renderContestProblem(contestId,problemId, token){
+  if(token != renderToken) return;
+  if(!state.currentUser){
+    renderPlaceholder("You must login to view contest problems","",token);
+    return;
+  } else if(!state.dbUser){
+    renderPlaceholder("You must create a username to view contest problems","",token);
+    return;
+  }
+
+  renderLoading("loading contest problem")
+  const problem = await findContestProblem(contestId, problemId, state.dbUser.user_id);
+  
+  if(!problem){
+    renderPlaceholder(`Problem ${problemId} does not exist in contest ${contestId}`,"",token);
+    return;
+  }
+
+  const example = await findExample(problemId);
+
+  if(token != renderToken) return;
+
+    app.innerHTML = `
+    <section class="general-layout">
+      <div class="panel">
+        <div class="panel-header">
+          <h1 class="panel-title">${escapeHtml(problem.problem_order)}: ${escapeHtml(problem.problem_name)}</h1>
+          <a class="button secondary" href="/contests/${contestId}/home" data-link>Contest ${contestId}</a>
+        </div>
+        <div class="general-summary">
+            <p class="preformatted">${escapeHtml(problem.problem_statement)}</p>
+            ${
+              example 
+              ? `<h1 class="panel-title">Example</h1>
+            <br>
+            <div class="panel">
+              <div class="panel-header">
+                <h1 class="panel-title">Input</h1>
+                 <button class="button secondary" id="copy-input" type="button">copy</button>
+              </div>
+              <div class="general-summary">
+                <p class="preformatted">${escapeHtml(example.input)}</p>
+              </div>
+            </div>
+            <br>
+            <div class="panel">
+              <div class="panel-header">
+                <h1 class="panel-title">Output</h1>
+                <button class="button secondary" id="copy-output" type="button">copy</button>
+              </div>
+              <div class="general-summary">
+                <p class="preformatted">${escapeHtml(example.solution)}</p>
+              </div>
+            </div>` : ""
+            }
+          </div>
+          <div class="status" id="submit-status" role="status"></div>
+        </div>
+      </div>
+
+      <aside class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">problem</h2>
+        </div>
+        <div class="general-summary">
+          <dl>
+            <dt>name</dt>
+            <dd>${escapeHtml(problem.problem_name)}</dd>
+            <dt>order</dt>
+            <dd>${escapeHtml(problem.problem_order)}</dd>
+            <dt>runtime</dt>
+            <dd>${escapeHtml(problem.runtime_ms)} ms</dd>
+            <dt>memory</dt>
+            <dd>${escapeHtml(problem.memory_mb)} MB</dd>
+            <dt>rating</dt>
+            <dd>${escapeHtml(problem.problem_rating)}</dd>
+            <dt>status</dt>
+            ${
+              problem.accepted 
+              ?`<dd class="success-color">solved!</dd>`
+              :`<dd class="error-color">unsolved</dd>`
+            }
+          </dl>
+          <div class = "actions center-actions">
+            <a class="button" href="/submit/${problem.problem_id}" data-link>submit</a>
+          </div>
+        </div>
+      </aside>
+    </section>
+  `;
+  if(example){
+    document.querySelector("#copy-input")?.addEventListener("click", () => copyToBoard(example.input, "copy-input"));
+    document.querySelector("#copy-output")?.addEventListener("click", () => copyToBoard(example.solution, "copy-output"));
+  }
 }
 
 async function renderRegistration(contestId,token){
@@ -769,6 +865,14 @@ async function findProblem(problemId) {
 
   const problems = await loadProblems();
   return problems[0] || null;
+}
+
+async function findContestProblem(contestId, problemId, userId){
+  try{
+    return await api(`/contests/${contestId}/problemset/problem/${problemId}/${userId}`);
+  } catch{
+    return null;
+  }
 }
 
 async function renderSubmit(problemId, token) {
@@ -1322,6 +1426,7 @@ async function render() {
   const token = ++renderToken;
 
   const route = window.location.pathname;
+  let pathItems = route.split("/");
   setActiveNav(route);
   if(!route.startsWith("/status")) stopRefresh()
 
@@ -1331,17 +1436,19 @@ async function render() {
     } else if(route === "/contests"){
       await renderContests(token)
     } else if (/^\/contests\/\d+\/registration$/.test(route)){
-      await renderRegistration(route.split("/")[2],token);
+      await renderRegistration(pathItems[2],token);
     } else if (/^\/contests\/\d+\/home$/.test(route)){
-      await renderContestHome(route.split("/")[2],token);
+      await renderContestHome(pathItems[2],token);
+    } else if(/^\/contests\/\d+\/problemset\/problem\/\d+$/.test(route)){
+      await renderContestProblem(pathItems[2],pathItems[5],token)
     } else if (route === "/problemset") {
       await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){
-      await renderProblem(route.split("/")[3],token);
+      await renderProblem(pathItems[3],token);
     } else if (route === "/submit") {
       await renderSubmit(null,token);
     } else if (route.startsWith("/submit/")) {
-      await renderSubmit(route.split("/")[2],token);
+      await renderSubmit(pathItems[2],token);
     } else if (route.startsWith("/status")) {
       await renderStatus(token);
     } else if (route === "/login") {

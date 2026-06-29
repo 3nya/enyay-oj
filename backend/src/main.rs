@@ -367,6 +367,24 @@ async fn get_problem(
     Ok(Json(problem))
 }
 
+async fn get_contest_problem(
+    State(state): State<AppState>,
+    Path((contest_id,problem_id, user_id)): Path<(i64,i64,i64)>
+) -> Result<Json<enyay::PublicProblem>, ApiError>{
+    if let Some(contest) = enyay::get_contest(&state.pool, contest_id, Some(user_id)).await?{
+        if !contest.registered{
+            return Err(ApiError::BadRequest(format!("you are not registered for contest {contest_id}")));
+        } else{
+            return Ok(Json(
+                enyay::get_contest_public_problem(&state.pool, problem_id, user_id, contest_id)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found in contest {contest_id}")))?
+            ));
+        }
+    }
+    Err(ApiError::NotFound(format!("contest {contest_id} does not exist")))
+}
+
 async fn get_recent_problems(
     State(state): State<AppState>,
     user_id: Option<Path<i64>>
@@ -762,6 +780,7 @@ async fn main() -> Result<(), ApiError> {
 
     let app = Router::new()
         .route("/", get(frontend_index))
+        .route("/contests/{contest_id}/problemset/problem/{problem_id}", get(frontend_index))
         .route("/contests/{contest_id}/registration",get(frontend_index))
         .route("/contests/{contest_id}/home", get(frontend_index))
         .route("/contests", get(frontend_index))
@@ -806,6 +825,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/contests/{contest_id}/submissions/recent",get(get_recent_contest_submissions))
         .route("/contests/{contest_id}/submissions", post(create_contest_submission))
         .route("/contests/{contest_id}/rankings",get(get_contest_rankings))
+        .route("/contests/{contest_id}/problemset/problem/{problem_id}/{user_id}", get(get_contest_problem))
         .route("/contests/{contest_id}/problemset/{user_id}", get(get_user_contest_problems))
         .route("/contests/{contest_id}/problemset", get(get_contest_problems))
         .route("/contests/recent/{user_id}", get(get_recent_user_contests))

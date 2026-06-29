@@ -618,6 +618,43 @@ pub async fn get_public_problem(
     .await
 }
 
+pub async fn get_contest_public_problem(
+    pool: &MySqlPool,
+    problem_id: i64,
+    user_id: i64,
+    contest_id: i64
+) -> Result<Option<PublicProblem>, sqlx::Error>{
+
+    sqlx::query_as::<_,PublicProblem>(r#"
+        SELECT 
+        p.problem_id,
+        p.problem_name,
+        p.runtime_ms,
+        p.memory_mb,
+        p.problem_rating,
+        p.problem_statement,
+        p.judge_type,
+        EXISTS(
+            SELECT 1 FROM submissions s WHERE
+            s.problem_id = p.problem_id
+            AND s.user_id = ?
+            AND s.contest_id = cp.contest_id
+            AND s.verdict = 'AC'
+        ) as accepted,
+        cp.problem_order
+        FROM problems p JOIN contest_problems cp
+        ON p.problem_id = cp.problem_id
+        WHERE p.problem_id = ? AND
+        cp.contest_id = ? AND
+        p.is_public = TRUE
+    "#)
+    .bind(user_id)
+    .bind(problem_id)
+    .bind(contest_id)
+    .fetch_optional(pool)  
+    .await
+}
+
 pub async fn get_recent_problems(
     pool: &MySqlPool,
     user_id: Option<i64>,
