@@ -203,12 +203,16 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
-.status-toolbar{
+.status-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
+}
 
+.status-toolbar .checkline {
+  margin-left: auto;
 }
 
 .panel-title {
@@ -348,6 +352,47 @@ a {
 .gold-color{
   color:var(--gold);
   font-weight: 700;
+}
+
+#contest-problem-id{
+  max-width: 100px;
+}
+
+.contest-header{
+  align-items: flex-start;
+  padding: 16px 14px 18px;
+}
+
+.problem-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.problem-title-group .button {
+  align-self: flex-start;
+}
+
+.contest-submit-layout {
+  align-items: stretch;
+}
+
+#contest-submit-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
+  min-height: 0;
+}
+
+.contest-ranking-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ranking-scroll {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .empty-row {
@@ -701,5 +746,18 @@ textarea {
 
   .status-table td:nth-child(2){
     font-size: 16px;
+  }
+
+  .contest-header {
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  #contest-submit-panel {
+    overflow: visible;
+  }
+
+  .ranking-scroll {
+    overflow-y: visible;
   }
 }

@@ -133,6 +133,14 @@ async function loadSubmissionsByUser(userId){
   return state.userSubmissions;
 }
 
+async function loadContestSubmissions(contestId){
+  return await api(`/contests/${contestId}/submissions/recent`);
+}
+
+async function loadContestSubmissionsByUser(contestId, userId){
+  return await api(`/contests/${contestId}/submissions/recent/${userId}`);
+}
+
 function getTimeZoneName(date) {
   const parts = new Intl.DateTimeFormat(undefined, {
     timeZoneName: "short",
@@ -550,6 +558,7 @@ async function renderContestProblem(contestId,problemId, token){
 
   renderLoading("loading contest problem")
   const problem = await findContestProblem(contestId, problemId, state.dbUser.user_id);
+  const contestProblems = await loadContestProblems(contestId);
   
   if(!problem){
     renderPlaceholder(`Problem ${problemId} does not exist in contest ${contestId}`,"",token);
@@ -563,9 +572,29 @@ async function renderContestProblem(contestId,problemId, token){
     app.innerHTML = `
     <section class="general-layout">
       <div class="panel">
-        <div class="panel-header">
-          <h1 class="panel-title">${escapeHtml(problem.problem_order)}: ${escapeHtml(problem.problem_name)}</h1>
-          <a class="button secondary" href="/contests/${contestId}/home" data-link>Contest ${contestId}</a>
+        <div class="panel-header contest-header">
+          <div class = "problem-title-group">
+            <label for="problem-title">Contest ${escapeHtml(contestId)}</label>
+            <h1 class="panel-title" id = "problem-title">[${escapeHtml(problem.problem_order)}] ${escapeHtml(problem.problem_name)}</h1>
+          </div>
+          <div id="problem-select">
+            <label for="contest-problem-id">problem</label>
+            <select id="contest-problem-id" name="problem_id" required>
+                  ${
+                    contestProblems.length
+                      ? contestProblems
+                          .map(
+                            (item) => `
+                              <option value="${item.problem_id}" ${Number(item.problem_id) === Number(problemId) ? "selected" : ""}>
+                                ${escapeHtml(item.problem_order)}
+                              </option>
+                            `,
+                          )
+                          .join("")
+                      : `<option value="${escapeHtml(problemId)}">problem ${escapeHtml(problemId)}</option>`
+                  }
+            </select>
+          </div>
         </div>
         <div class="general-summary">
             <p class="preformatted">${escapeHtml(problem.problem_statement)}</p>
@@ -622,7 +651,8 @@ async function renderContestProblem(contestId,problemId, token){
             }
           </dl>
           <div class = "actions center-actions">
-            <a class="button" href="/submit/${problem.problem_id}" data-link>submit</a>
+            <a class="button" href="/contests/${contestId}/submit/${problem.problem_id}" data-link>submit</a>
+            <a class="button secondary" href="/contests/${contestId}/home" data-link>Contest ${contestId}</a>
           </div>
         </div>
       </aside>
@@ -631,6 +661,165 @@ async function renderContestProblem(contestId,problemId, token){
   if(example){
     document.querySelector("#copy-input")?.addEventListener("click", () => copyToBoard(example.input, "copy-input"));
     document.querySelector("#copy-output")?.addEventListener("click", () => copyToBoard(example.solution, "copy-output"));
+  }
+  document.querySelector("#contest-problem-id")?.addEventListener("change", (event) => {
+    navigate(`/contests/${contestId}/problemset/problem/${event.target.value}`);
+  });
+}
+
+async function renderContestSubmit(contestId, problemId, token) {
+  if(token != renderToken) return;
+  if(!state.currentUser){
+    renderPlaceholder("You must login to participate in contests", "", token);
+    return;
+  } else if(!state.dbUser){
+    renderPlaceholder("You must create a username to participate in contests", "", token);
+    return;
+  }
+
+  renderLoading("loading submit page");
+  const [problem, problems, ranks] = await Promise.all([
+    findContestProblem(contestId,problemId, state.dbUser.user_id),
+    loadContestProblems(contestId).catch(() => []),
+    api(`/contests/${contestId}/rankings`).catch(() => [])
+  ]);
+
+  const selectedId = problem?.problem_id ?? problems[0]?.problem_id ?? "";
+
+  if(token != renderToken) return;
+
+  app.innerHTML = `
+    <section class="submit-layout contest-submit-layout">
+      <form class="panel" id="submission-form">
+        <div class="panel-header">
+          <h1 class="panel-title">submit solution</h1>
+          <a class="button secondary" href="/contests/${contestId}/home" data-link>Contest ${escapeHtml(contestId)}</a>
+        </div>
+        <div style="padding: 14px;">
+          <div class="form-grid">
+            <div class="field">
+              <label for="problem-id">problem</label>
+              <select id="problem-id" name="problem_id" required>
+                ${
+                  problems.length
+                    ? problems
+                        .map(
+                          (item) => `
+                            <option value="${item.problem_id}" ${Number(item.problem_id) === Number(selectedId) ? "selected" : ""}>
+                              [${escapeHtml(item.problem_order)}] ${escapeHtml(item.problem_name)}
+                            </option>
+                          `,
+                        )
+                        .join("")
+                    : `<option value="${escapeHtml(selectedId)}">problem ${escapeHtml(selectedId)}</option>`
+                }
+              </select>
+            </div>
+            <div class="field">
+              <label for="language">language</label>
+              <select id="language" name="language">
+                <option value="c++20">c++20</option>
+                <option value="python3">python3.12</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="source-code">source code</label>
+            <textarea id="source-code" name="source_code" spellcheck="false" required></textarea>
+          </div>
+          <div class="actions">
+            <button class="button" type="submit">submit</button>
+          </div>
+          <div class="status" id="submit-status" role="status"></div>
+        </div>
+      </form>
+
+      <div id="contest-submit-panel">
+      <aside class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">problem</h2>
+        </div>
+        <div class="general-summary">
+          ${
+            problem
+              ? `
+                <dl>
+                  <dt>order</dt>
+                  <dd>${escapeHtml(problem.problem_order)}</dd>
+                  <dt>name</dt>
+                  <dd>${escapeHtml(problem.problem_name)}</dd>
+                  <dt>runtime</dt>
+                  <dd>${escapeHtml(problem.runtime_ms)} ms</dd>
+                  <dt>memory</dt>
+                  <dd>${escapeHtml(problem.memory_mb)} MB</dd>
+                </dl>
+              `
+              : `<p class="status">Select a problem to submit.</p>`
+          }
+        </div>
+      </aside>
+
+      <aside class="panel contest-ranking-panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Ranking</h2>
+      </div>
+      <div class="general-summary ranking-scroll">
+        <table class="general-table ranking-table" aria-label="Ranking">
+        <colgroup>
+          <col style="width: 10%;">
+          <col style="width: 40%;">
+          <col style="width: 25%;">
+          <col style="width: 25%;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>who</th>
+            <th>points</th>
+            <th>penalty</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            ranks.length
+              ? ranks
+                  .map(
+                    (rank,index) => `
+                      <tr>
+                        <td>${escapeHtml(index+1)}</td>
+                        <td class ="${index===0 ? "gold-color": ""}">
+                          ${
+                            index===0 
+                            ?  `<span aria-hidden="true">&#9819;</span>`
+                            :""
+                          }
+                          ${escapeHtml(rank.user_name)}
+                        </td>
+                        <td class="success-color">${escapeHtml(rank.points)}</td>
+                        <td class="error-color">${escapeHtml(rank.penalty)}</td>
+                      </tr>
+                    `,
+                  )
+                  .join("")
+              : `<tr><td class="empty-row" colspan="4">No contestants found.</td></tr>`
+          }
+        </tbody>
+      </table>
+      </div>
+    </aside>
+    </div>
+    </section>
+  `;
+
+  document.querySelector("#problem-id")?.addEventListener("change", (event) => {
+    navigate(`/contests/${contestId}/submit/${event.target.value}`);
+  });
+  document.querySelector("#submission-form")?.addEventListener("submit", (event) => {
+    submitSolution(contestId,event);
+  });
+  const sourceCode = document.querySelector("#source-code");
+  if(sourceCode){
+    enableTabs(sourceCode);
   }
 }
 
@@ -963,7 +1152,9 @@ async function renderSubmit(problemId, token) {
   document.querySelector("#problem-id")?.addEventListener("change", (event) => {
     navigate(`/submit/${event.target.value}`);
   });
-  document.querySelector("#submission-form")?.addEventListener("submit", submitSolution);
+  document.querySelector("#submission-form")?.addEventListener("submit", (event) =>{
+    submitSolution(null,event);
+  });
   const sourceCode = document.querySelector("#source-code");
   if(sourceCode){
     enableTabs(sourceCode);
@@ -996,7 +1187,7 @@ function enableTabs(textarea) {
   })
 }
 
-async function submitSolution(event) {
+async function submitSolution(contestId,event) {
   const status = document.querySelector("#submit-status");
   event.preventDefault();
 
@@ -1022,21 +1213,35 @@ async function submitSolution(event) {
     }
 
     status.textContent = "creating submission";
-    const submission = await api("/submissions", {
-      method: "POST",
-      body: JSON.stringify({
-        user_id: user.user_id,
-        problem_id: Number(data.get("problem_id")),
-        language: data.get("language"),
-        source_code: data.get("source_code"),
-      }),
-    });
+    let submission;
+    if(contestId){
+      submission = await api(`/contests/${contestId}/submissions`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: user.user_id,
+          problem_id: Number(data.get("problem_id")),
+          language: data.get("language"),
+          source_code: data.get("source_code"),
+        }),
+      });
+    } else{
+      submission = await api("/submissions", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: user.user_id,
+          problem_id: Number(data.get("problem_id")),
+          language: data.get("language"),
+          source_code: data.get("source_code"),
+        }),
+      });
+    }
     
     state.userSubmissions = [];
     state.submissions = [];
 
     status.textContent = `submission ${submission.id} created, running judge`;
-    navigate('/status/my');
+    if(!contestId) navigate('/status/my');
+    else navigate(`/contests/${contestId}/status/my`);
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
@@ -1045,16 +1250,16 @@ async function submitSolution(event) {
   }
 }
 
-async function renderStatus(token){
+async function renderStatus(contestId,token){
   if(token != renderToken) return;
 
   renderLoading("loading status");
   stopRefresh()
-  const shouldPull = await renderTable(token);
+  const shouldPull = await renderTable(contestId, token);
 
   if(shouldPull){
     statusRefreshTimer = setInterval( async () => {
-      const shouldContinue = await renderTable(token).catch((error) =>{
+      const shouldContinue = await renderTable(contestId, token).catch((error) =>{
         console.error(error);
         return false;
       });
@@ -1063,15 +1268,17 @@ async function renderStatus(token){
   }
 }
 
-async function renderTable(token){
+async function renderTable(contestId, token){
   if(token != renderToken){
     stopRefresh();
     return;
   }
 
-  let myOnly = window.location.pathname === "/status/my"
-  if(!myOnly) state.submissions = [];
-  else state.userSubmissions = [];
+  let myOnly = window.location.pathname.includes("my");
+  if(!contestId){
+    if(!myOnly) state.submissions = [];
+    else state.userSubmissions = [];
+  }
 
   let submissions = null;
   if(myOnly && state.currentUser){
@@ -1080,10 +1287,12 @@ async function renderTable(token){
       navigate('/login/users');
       return;
     }
-    submissions = await loadSubmissionsByUser(user.user_id);
+    if(contestId) submissions = await loadContestSubmissionsByUser(contestId,user.user_id);
+    else submissions = await loadSubmissionsByUser(user.user_id);
   }
   else{
-    submissions = await loadSubmissions();
+    if(contestId) submissions = await loadContestSubmissions(contestId);
+    else submissions = await loadSubmissions();
     myOnly = false;
   }
   const params = new URLSearchParams(window.location.search);
@@ -1094,7 +1303,9 @@ async function renderTable(token){
   const visibleSubmissions = submissions.slice(start, start + problemsPerPage);
   const previousPage = Math.max(1, currentPage - 1);
   const nextPage = Math.min(totalPages, currentPage + 1);
-  const statusPath = myOnly ? "/status/my" : "/status"
+  let statusPath;
+  if(!contestId) statusPath = myOnly ? "/status/my" : "/status"
+  else statusPath = myOnly ? `/contests/${contestId}/status/my` : `/contests/${contestId}/status`;
 
   let myOnlyCheck = myOnly ? "checked" : "";
 
@@ -1113,6 +1324,10 @@ async function renderTable(token){
   app.innerHTML = `
     <section class="panel">
       <div class="status-toolbar">
+        ${ contestId
+          ? `<a class="button secondary" href="/contests/${contestId}/home" data-link>Contest ${escapeHtml(contestId)}</a>`
+          : ""
+        }
         <label class="checkline">
           <input id="my-only" type="checkbox" ${myOnlyCheck}>
             my only
@@ -1147,7 +1362,13 @@ async function renderTable(token){
                   .map(
                     ({submission, status}) => `
                       <tr>
-                        <td><a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a></td>
+                        <td>
+                        ${
+                          contestId
+                          ? `<a href="/contests/${contestId}/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a>`
+                          : `<a href="/problemset/problem/${submission.problem_id}" data-link>${escapeHtml(submission.problem_id)}</a>`
+                        }
+                        </td>
                         <td>${escapeHtml(formatDateTimeSum(submission.submitted_time))}</td>
                         <td>${escapeHtml(submission.user_name || `user ${submission.user_id}`)}</td>
                         <td>${escapeHtml(submission.runtime_ms ?? "-")} ms</td>
@@ -1173,16 +1394,18 @@ async function renderTable(token){
 
   document.querySelector("#my-only").addEventListener("change", (event) => {
     if(event.target.checked){
-      navigate("/status/my");
+      if(contestId) navigate(`/contests/${contestId}/status/my`);
+      else navigate("/status/my");
     } else{
-      navigate("/status");
+      if(contestId) navigate(`/contests/${contestId}/status`);
+      else navigate("/status");
     }
   });
-  return myOnly ? hasPending() : true;
+  return myOnly ? hasPending(submissions) : true;
 }
 
-function hasPending(){
-  return state.userSubmissions.some((submission) => 
+function hasPending(submissions){
+  return submissions.some((submission) => 
     (submission.verdict === "PENDING" || submission.verdict === "JUDGING")
   );
 }
@@ -1428,7 +1651,7 @@ async function render() {
   const route = window.location.pathname;
   let pathItems = route.split("/");
   setActiveNav(route);
-  if(!route.startsWith("/status")) stopRefresh()
+  if(!route.includes("status")) stopRefresh()
 
   try {
     if (route === "/") {
@@ -1439,8 +1662,12 @@ async function render() {
       await renderRegistration(pathItems[2],token);
     } else if (/^\/contests\/\d+\/home$/.test(route)){
       await renderContestHome(pathItems[2],token);
+    } else if(/^\/contests\/\d+\/submit\/\d+$/.test(route)) {
+      await renderContestSubmit(pathItems[2],pathItems[4],token)
     } else if(/^\/contests\/\d+\/problemset\/problem\/\d+$/.test(route)){
       await renderContestProblem(pathItems[2],pathItems[5],token)
+    } else if(/^\/contests\/\d+\/status(\/my)?/.test(route)){
+      await renderStatus(pathItems[2],token);
     } else if (route === "/problemset") {
       await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){
@@ -1450,7 +1677,7 @@ async function render() {
     } else if (route.startsWith("/submit/")) {
       await renderSubmit(pathItems[2],token);
     } else if (route.startsWith("/status")) {
-      await renderStatus(token);
+      await renderStatus(null,token);
     } else if (route === "/login") {
       await renderLogin(token);
     } else if (route === "/login/users"){
