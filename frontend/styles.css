@@ -312,20 +312,37 @@ a {
   min-width: 86px;
   justify-content: center;
   padding: 4px 8px;
-  border: 1px solid var(--success);
   border-radius: 6px;
-  color: var(--success);
   font-size: 16px;
 }
 
-.ranking-table {
+.registered {
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+
+.ongoing {
+  border: 1px solid var(--accent-dark);
+  color: var(--accent-dark);
+}
+
+.general-table.ranking-table {
+  max-width: 360px;
   min-width: 0;
+  width: 100%;
+  table-layout: auto;
 }
 
 .ranking-table th,
 .ranking-table td {
   font-size: 16px;
   padding: 7px 8px;
+}
+
+.ranking-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
 }
 
 .contest-problemset-table {
@@ -375,6 +392,7 @@ a {
 
 .contest-submit-layout {
   align-items: stretch;
+  min-width: 0;
 }
 
 #contest-submit-panel {
@@ -382,17 +400,15 @@ a {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
   min-height: 0;
+  min-width: 0;
 }
 
 .contest-ranking-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-
-.ranking-scroll {
-  min-height: 0;
-  overflow-y: auto;
+  max-height: 500px;
+  min-width: 0;
 }
 
 .empty-row {

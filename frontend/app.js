@@ -110,6 +110,10 @@ async function loadProblems() {
   return state.problems;
 }
 
+async function checkRegistration(contestId, userId){
+  return await api(`/contests/${contestId}/check/${userId}`);
+}
+
 async function loadContests(){
   if(state.contests.length) return state.contests;
   if(state.dbUser) state.contests = await api(`/contests/recent/${state.dbUser.user_id}`);
@@ -347,7 +351,10 @@ async function renderContests(token){
                         <td>
                           ${
                             contest.is_active
-                              ? `<a href="/contests/${contest.contest_id}/home" data-link>enter</a>`
+                              ? 
+                                contest.registered
+                                ? `<a href="/contests/${contest.contest_id}/home" data-link>enter</a>`
+                                : `<span class="contest-badge ongoing">ongoing</span>`
                               : contest.registered
                                 ? `<span class="contest-badge registered">registered</span>`
                                 : `<a href="/contests/${contest.contest_id}/registration" data-link>register</a>`
@@ -427,8 +434,21 @@ async function renderContests(token){
 }
 
 async function renderContestHome(contestId, token){
+  if(!state.currentUser){
+    renderPlaceholder("You must login to view contest", "", token);
+    return;
+  } else if(!state.dbUser){
+    renderPlaceholder("You must create a username to view contest", "", token);
+    return;
+  }
   if(token != renderToken) return;
   renderLoading("loading contest")
+
+  const registered = await checkRegistration(contestId, state.dbUser.user_id);
+  if(!registered){
+    renderPlaceholder("You are not registered for this contest", "", token);
+    return;
+  }
 
   let contestProblems = await loadContestProblems(contestId);
   let ranks = await api(`/contests/${contestId}/rankings`);
@@ -494,11 +514,11 @@ async function renderContestHome(contestId, token){
       </div>
       
 
-      <aside class="panel">
+      <aside class="panel contest-ranking-panel">
         <div class="panel-header">
           <h2 class="panel-title">Ranking</h2>
         </div>
-        <div class="general-summary">
+        <div class="general-summary ranking-scroll">
           <table class="general-table ranking-table" aria-label="Ranking">
           <colgroup>
             <col style="width: 10%;">
@@ -557,6 +577,12 @@ async function renderContestProblem(contestId,problemId, token){
   }
 
   renderLoading("loading contest problem")
+  const registered = await checkRegistration(contestId, state.dbUser.user_id);
+  if(!registered){
+    renderPlaceholder("You are not registered for this contest", "", token);
+    return;
+  }
+
   const problem = await findContestProblem(contestId, problemId, state.dbUser.user_id);
   const contestProblems = await loadContestProblems(contestId);
   
@@ -678,6 +704,11 @@ async function renderContestSubmit(contestId, problemId, token) {
   }
 
   renderLoading("loading submit page");
+  const registered = await checkRegistration(contestId, state.dbUser.user_id);
+  if(!registered){
+    renderPlaceholder("You are not registered for this contest", "", token);
+    return;
+  }
   const [problem, problems, ranks] = await Promise.all([
     findContestProblem(contestId,problemId, state.dbUser.user_id),
     loadContestProblems(contestId).catch(() => []),
@@ -823,8 +854,69 @@ async function renderContestSubmit(contestId, problemId, token) {
   }
 }
 
+async function renderContestFinalRankings(contestId, token){
+  if(token != renderToken) return;
+  const ranks = await api(`/contests/${contestId}/rankings`).catch(() => []);
+  if(token != renderToken) return;
+
+  app.innerHTML = 
+  ` 
+  <section class="submit-layout">
+  <aside class="panel contest-ranking-panel">
+  <div class="panel-header">
+    <h2 class="panel-title">Ranking</h2>
+  </div>
+  <div class="general-summary ranking-scroll">
+    <table class="general-table ranking-table" aria-label="Ranking">
+    <colgroup>
+      <col style="width: 10%;">
+      <col style="width: 40%;">
+      
+    </colgroup>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>who</th>
+        <th>points</th>
+        <th>penalty</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${
+        ranks.length
+          ? ranks
+              .map(
+                (rank,index) => `
+                  <tr>
+                    <td>${escapeHtml(index+1)}</td>
+                    <td class ="${index===0 ? "gold-color": ""}">
+                      ${
+                        index===0 
+                        ?  `<span aria-hidden="true">&#9819;</span>`
+                        :""
+                      }
+                      ${escapeHtml(rank.user_name)}
+                    </td>
+                    <td class="success-color">${escapeHtml(rank.points)}</td>
+                    <td class="error-color">${escapeHtml(rank.penalty)}</td>
+                  </tr>
+                `,
+              )
+              .join("")
+          : `<tr><td class="empty-row" colspan="4">No contestants found.</td></tr>`
+      }
+    </tbody>
+  </table>
+  </div>
+</aside>
+  </section>
+  `
+
+}
+
 async function renderRegistration(contestId,token){
   if(token != renderToken) return;
+  state.contests = [];
   app.innerHTML = `
     <section class="panel">
       <div class="panel-header">
@@ -1252,9 +1344,22 @@ async function submitSolution(contestId,event) {
 
 async function renderStatus(contestId,token){
   if(token != renderToken) return;
-
   renderLoading("loading status");
   stopRefresh()
+  if(contestId){
+    if(!state.currentUser){
+      renderPlaceholder("You must be logged in to view contest statuses","",token);
+      return;
+    } else if(!state.dbUser){
+      renderPlaceholder("You must create a username to view contest statuses","",token);
+      return;
+    } 
+    const registered = await checkRegistration(contestId, state.dbUser.user_id);
+    if(!registered){
+      renderPlaceholder("You are not registered for this contest","",token);
+      return;
+    }
+  }
   const shouldPull = await renderTable(contestId, token);
 
   if(shouldPull){
@@ -1668,6 +1773,8 @@ async function render() {
       await renderContestProblem(pathItems[2],pathItems[5],token)
     } else if(/^\/contests\/\d+\/status(\/my)?/.test(route)){
       await renderStatus(pathItems[2],token);
+    } else if(/^\/contests\/\d+\/finalranks/.test(route)){
+      await renderContestFinalRankings(pathItems[2],token);
     } else if (route === "/problemset") {
       await renderProblemset(token);
     } else if(route.startsWith("/problemset/problem/")){

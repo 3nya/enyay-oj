@@ -20,6 +20,42 @@ pub struct UserRanking {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
+pub struct FinalRanking {
+    pub user_id: i64,
+    pub user_name: String,
+    pub points: i32,
+    pub penalty: i32,
+    pub problems: Vec<PublicRankingItems>
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct RankingItems{
+    pub user_id: i64,
+    pub user_name: String,
+    pub points: i32,
+    pub penalty: i32,
+    pub problem_id: i64,
+    pub problem_order: String,
+    pub accepted: bool
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct PublicRankingItems{
+    pub problem_id: i64,
+    pub problem_order: String,
+    pub accepted: bool
+}
+
+impl PublicRankingItems{
+    fn from_private(item: RankingItems) -> Self{
+        Self { problem_id: item.problem_id, 
+            problem_order: item.problem_order, 
+            accepted: item.accepted 
+        }
+    }
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Contest{
     pub contest_id: i64,
     pub contest_name: String,
@@ -1076,6 +1112,89 @@ pub async fn get_contest_rankings(
     .bind(limit)
     .fetch_all(pool)
     .await
+}
+
+pub async fn get_contest_final_ranking(
+    pool: & MySqlPool,
+    contest_id: i64,
+    limit: i64
+) -> Result<Vec<FinalRanking>,sqlx::Error>{
+    let items = sqlx::query_as::<_,RankingItems>(r#"
+        SELECT 
+        u.user_id,
+        u.user_name,
+        cr.points,
+        cr.penalty,
+        cp.problem_id, 
+        cp.problem_order,
+        EXISTS(
+            SELECT 1 FROM 
+            submissions s
+            WHERE s.problem_id = cp.problem_id
+            AND u.user_id = s.user_id
+            AND s.contest_id = cp.contest_id
+            AND s.verdict = 'AC'
+        ) as accepted
+        FROM
+        (
+            SELECT * FROM contest_registrations crsub
+            WHERE contest_id = ?
+            ORDER BY crsub.points DESC, 
+            crsub.penalty ASC, 
+            crsub.user_id ASC
+            LIMIT ?
+        ) cr 
+        JOIN users u
+        ON u.user_id = cr.user_id
+        JOIN contest_problems cp ON
+        cr.contest_id = cp.contest_id
+        ORDER BY 
+        cr.points DESC, 
+        cr.penalty ASC, 
+        u.user_id ASC,
+        cp.problem_order ASC
+    "#)
+    .bind(contest_id)
+    .bind(limit)
+    .fetch_all(pool).await?;
+
+    let mut final_ranks = Vec::new();
+    let mut ranking_item = None;
+
+    for item in items{
+        match &mut ranking_item{
+            None => {
+                ranking_item = Some(FinalRanking{
+                    user_id: item.user_id,
+                    user_name: item.user_name.clone(),
+                    points: item.points,
+                    penalty: item.penalty,
+                    problems: vec![PublicRankingItems::from_private(item)]
+                })
+            }
+            Some(unwrapped_ranking_item) => {
+                if unwrapped_ranking_item.user_id == item.user_id{
+                    unwrapped_ranking_item.problems.push(PublicRankingItems::from_private(item));
+                } else{
+                    final_ranks.push(unwrapped_ranking_item.to_owned());
+                    ranking_item = Some(FinalRanking { 
+                        user_id: item.user_id, 
+                        user_name: item.user_name.clone(), 
+                        points: item.points,
+                        penalty: item.penalty,
+                        problems: vec![PublicRankingItems::from_private(item)] 
+                    })
+                }
+            }
+        } 
+    }
+
+    if let Some(item) = ranking_item{
+        final_ranks.push(item.to_owned());
+    }
+
+    Ok(final_ranks)
+
 }
 
 pub async fn claim_next_pending(

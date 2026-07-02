@@ -535,6 +535,20 @@ async fn register_contest(
     }
 }
 
+async fn check_registration(
+    State(state): State<AppState>,
+    Path((contest_id,user_id)): Path<(i64, i64)>
+) -> Result<Json<bool>, ApiError>{
+    let contest = enyay::get_contest(&state.pool, contest_id, Some(user_id))
+    .await?;
+    match contest{
+        Some(contest) =>{
+            return Ok(Json(contest.registered));
+        } 
+        None => return Err(ApiError::NotFound(format!("contest {contest_id} does not exist")))
+    }
+}
+
 async fn get_contest_rankings(
     State(state): State<AppState>,
     Path(contest_id): Path<i64>
@@ -543,6 +557,16 @@ async fn get_contest_rankings(
         return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
     }
     return Ok(Json(enyay::get_contest_rankings(&state.pool, contest_id, 20).await?))
+}
+
+async fn get_contest_final_ranking(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::FinalRanking>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id, None).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {contest_id} does not exist")));
+    }
+    Ok(Json(enyay::get_contest_final_ranking(&state.pool, contest_id, 20).await?))
 }
 
 async fn create_submission(
@@ -786,6 +810,7 @@ async fn main() -> Result<(), ApiError> {
         .route("/contests/{contest_id}/submit/{problem_id}",get(frontend_index))
         .route("/contests/{contest_id}/registration",get(frontend_index))
         .route("/contests/{contest_id}/home", get(frontend_index))
+        .route("/contests/{contest_id}/finalranks",get(frontend_index))
         .route("/contests", get(frontend_index))
         .route("/problemset", get(frontend_index))
         .route("/problemset/problem/{problem_id}", get(frontend_index))
@@ -828,10 +853,12 @@ async fn main() -> Result<(), ApiError> {
         .route("/contests/{contest_id}/submissions/recent",get(get_recent_contest_submissions))
         .route("/contests/{contest_id}/submissions", post(create_contest_submission))
         .route("/contests/{contest_id}/rankings",get(get_contest_rankings))
+        .route("/contests/{contest_id}/inactive/finalrankings",get(get_contest_final_ranking))
         .route("/contests/{contest_id}/problemset/problem/{problem_id}/{user_id}", get(get_contest_problem))
         .route("/contests/{contest_id}/problemset/{user_id}", get(get_user_contest_problems))
         .route("/contests/{contest_id}/problemset", get(get_contest_problems))
         .route("/contests/recent/{user_id}", get(get_recent_user_contests))
+        .route("/contests/{contest_id}/check/{user_id}",get(check_registration))
         .route("/contests/create", post(create_contest))
         .route("/contests/recent", get(get_recent_contests))
         .with_state(app_state);
