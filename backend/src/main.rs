@@ -563,8 +563,13 @@ async fn get_contest_final_ranking(
     State(state): State<AppState>,
     Path(contest_id): Path<i64>
 ) -> Result<Json<Vec<enyay::FinalRanking>>, ApiError>{
-    if enyay::get_contest(&state.pool, contest_id, None).await?.is_none(){
-        return Err(ApiError::NotFound(format!("contest {contest_id} does not exist")));
+    match enyay::get_contest(&state.pool, contest_id, None).await?{
+        None => return Err(ApiError::NotFound(format!("contest {contest_id} does not exist"))),
+        Some(contest) =>{
+            if Utc::now() < contest.end_time{
+                return Err(ApiError::BadRequest(format!("contest {contest_id} is still ongoing")))
+            }
+        }
     }
     Ok(Json(enyay::get_contest_final_ranking(&state.pool, contest_id, 20).await?))
 }

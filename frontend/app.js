@@ -314,12 +314,12 @@ async function renderContests(token){
   }
 
   app.innerHTML = `
-  <section class="home-grid home-grid-single table-scroll">
+  <section class="home-grid home-grid-single">
     <div class="panel">
       <div class="panel-header">
         <h1 class="panel-title">Current or upcoming contests</h1>
     </div>
-    <div>
+    <div class="table-scroll">
       <table class="general-table contest-table" aria-label="Upcoming and active contests">
         <colgroup>
           <col style="width: 25%;">
@@ -377,12 +377,12 @@ async function renderContests(token){
   </section>
   <br> 
   <br>
-  <section class="home-grid home-grid-single table-scroll">
+  <section class="home-grid home-grid-single">
     <div class="panel">
       <div class="panel-header">
         <h1 class="panel-title">Past contests</h1>
     </div>
-    <div>
+    <div class="table-scroll">
       <table class="general-table contest-table" aria-label="Past Contests">
         <colgroup>
           <col style="width: 25%;">
@@ -856,21 +856,29 @@ async function renderContestSubmit(contestId, problemId, token) {
 
 async function renderContestFinalRankings(contestId, token){
   if(token != renderToken) return;
-  const ranks = await api(`/contests/${contestId}/rankings`).catch(() => []);
+  const ranks = await api(`/contests/${contestId}/inactive/finalrankings`);
+  const problems = ranks[0]?.problems || [];
   if(token != renderToken) return;
 
   app.innerHTML = 
   ` 
-  <section class="submit-layout">
-  <aside class="panel contest-ranking-panel">
+  <section class="ranking-page-layout">
+  <aside class="panel">
   <div class="panel-header">
     <h2 class="panel-title">Ranking</h2>
   </div>
-  <div class="general-summary ranking-scroll">
-    <table class="general-table ranking-table" aria-label="Ranking">
+  <div class="table-scroll">
+    <table class="general-table final-ranking-table" aria-label="Ranking">
     <colgroup>
-      <col style="width: 10%;">
-      <col style="width: 40%;">
+      <col class="rank-col">
+      <col class="user-col">
+      <col class="point-col">
+      <col class="penalty-col">
+      ${
+        problems.map(() =>
+          `<col class="problem-col">`
+        ).join("")
+      }
       
     </colgroup>
     <thead>
@@ -879,6 +887,10 @@ async function renderContestFinalRankings(contestId, token){
         <th>who</th>
         <th>points</th>
         <th>penalty</th>
+        ${problems.map( (problem) =>
+          `<th>${escapeHtml(problem.problem_order)}</th>`
+        ).join("")
+      }
       </tr>
     </thead>
     <tbody>
@@ -899,6 +911,13 @@ async function renderContestFinalRankings(contestId, token){
                     </td>
                     <td class="success-color">${escapeHtml(rank.points)}</td>
                     <td class="error-color">${escapeHtml(rank.penalty)}</td>
+                    ${
+                      rank.problems.map( (problem) => 
+                        problem.accepted 
+                          ? `<td><span class="success-color checkmark" aria-hidden="true">&#10003;</span></td>`
+                          : `<td><span class="error-color checkmark" aria-hidden="true">&#10005;</span></td>`
+                      ).join("")
+                    }
                   </tr>
                 `,
               )
@@ -1771,9 +1790,9 @@ async function render() {
       await renderContestSubmit(pathItems[2],pathItems[4],token)
     } else if(/^\/contests\/\d+\/problemset\/problem\/\d+$/.test(route)){
       await renderContestProblem(pathItems[2],pathItems[5],token)
-    } else if(/^\/contests\/\d+\/status(\/my)?/.test(route)){
+    } else if(/^\/contests\/\d+\/status(\/my)$?/.test(route)){
       await renderStatus(pathItems[2],token);
-    } else if(/^\/contests\/\d+\/finalranks/.test(route)){
+    } else if(/^\/contests\/\d+\/finalranks$/.test(route)){
       await renderContestFinalRankings(pathItems[2],token);
     } else if (route === "/problemset") {
       await renderProblemset(token);

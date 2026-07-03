@@ -151,6 +151,7 @@ a {
   grid-template-columns: minmax(0, 1fr) 260px;
   gap: 44px;
   align-items: start;
+  min-width: 0;
 }
 
 .home-grid-single {
@@ -186,6 +187,7 @@ a {
   border: 2px solid var(--line);
   border-radius: 8px;
   background: var(--paper);
+  min-width: 0;
 }
 
 .panel-username{
@@ -260,6 +262,7 @@ a {
 }
 
 .table-scroll{
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -343,6 +346,38 @@ a {
   min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
+}
+
+.final-ranking-table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
+}
+
+.final-ranking-table .rank-col {
+  width: 64px;
+}
+
+.final-ranking-table .user-col {
+  width: 180px;
+}
+
+.final-ranking-table .point-col,
+.final-ranking-table .penalty-col {
+  width: 90px;
+}
+
+.final-ranking-table .problem-col {
+  width: 64px;
+}
+
+.ranking-page-layout {
+  display: flex;
+  justify-content: center;
+}
+
+.ranking-page-layout .panel {
+  width: min(100%, 900px);
 }
 
 .contest-problemset-table {
@@ -482,6 +517,7 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 290px;
   gap: 18px;
+  min-width: 0;
 }
 
 .center-actions{
@@ -496,6 +532,7 @@ textarea {
 
 .general-layout{
   align-items: start;
+  min-width: 0;
 }
 
 .general-summary {
@@ -775,5 +812,42 @@ textarea {
 
   .ranking-scroll {
     overflow-y: visible;
+  }
+}
+
+@media (max-width: 900px) {
+  .contest-table {
+    min-width: 760px;
+  }
+
+  .contest-table th,
+  .contest-table td {
+    padding: 7px 8px;
+    font-size: 16px;
+  }
+
+  .contest-table td:nth-child(3),
+  .contest-table td:nth-child(4) {
+    font-size: 14px;
+  }
+
+  .contest-problemset-table {
+    min-width: 560px;
+  }
+
+  .contest-problemset-table th,
+  .contest-problemset-table td {
+    padding: 7px 8px;
+    font-size: 15px;
+  }
+
+  .general-table.ranking-table {
+    min-width: 340px;
+  }
+
+  .ranking-table th,
+  .ranking-table td {
+    padding: 6px;
+    font-size: 14px;
   }
 }
