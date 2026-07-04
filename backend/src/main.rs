@@ -535,15 +535,15 @@ async fn register_contest(
     }
 }
 
-async fn check_registration(
+async fn get_contest(
     State(state): State<AppState>,
     Path((contest_id,user_id)): Path<(i64, i64)>
-) -> Result<Json<bool>, ApiError>{
+) -> Result<Json<enyay::Contest>, ApiError>{
     let contest = enyay::get_contest(&state.pool, contest_id, Some(user_id))
     .await?;
     match contest{
         Some(contest) =>{
-            return Ok(Json(contest.registered));
+            return Ok(Json(contest));
         } 
         None => return Err(ApiError::NotFound(format!("contest {contest_id} does not exist")))
     }
@@ -863,9 +863,9 @@ async fn main() -> Result<(), ApiError> {
         .route("/contests/{contest_id}/problemset/{user_id}", get(get_user_contest_problems))
         .route("/contests/{contest_id}/problemset", get(get_contest_problems))
         .route("/contests/recent/{user_id}", get(get_recent_user_contests))
-        .route("/contests/{contest_id}/check/{user_id}",get(check_registration))
         .route("/contests/create", post(create_contest))
         .route("/contests/recent", get(get_recent_contests))
+        .route("/contests/{contest_id}/user/{user_id}", get(get_contest))
         .with_state(app_state);
 
     let addr = bind_addr

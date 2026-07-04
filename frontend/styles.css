@@ -415,6 +415,29 @@ a {
   padding: 16px 14px 18px;
 }
 
+.contest-home-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.contest-countdown-header {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.contest-countdown {
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.contest-home-header .button {
+  justify-self: end;
+  margin-left: auto;
+}
+
 .problem-title-group {
   display: flex;
   flex-direction: column;
