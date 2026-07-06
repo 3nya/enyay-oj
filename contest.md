@@ -49,6 +49,15 @@ ALTER TABLE submissions ADD FOREIGN KEY (contest_id) REFERENCES contests(contest
 ALTER TABLE problems ADD is_public BOOLEAN NOT NULL DEFAULT TRUE;
 ```
 
+### Logs
+```sql
+CREATE TABLE error_log(
+    error_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    error_message TEXT,
+    error_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
 ### Indexes
 ```sql
 CREATE INDEX idx_submissions_contest_user_problem_verdict

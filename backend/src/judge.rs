@@ -1,3 +1,4 @@
+use sqlx::MySqlPool;
 use tokio::{fs, process::Command, sync::{OwnedSemaphorePermit}, time::{Duration, timeout}};
 use std::{fmt::{self}, io, os::unix::process::ExitStatusExt, str::FromStr};
 use std::{path::PathBuf, process::{ExitStatus, Output, Stdio}, cmp::max};
@@ -14,19 +15,19 @@ pub struct JudgeVolume{
 }
  
 impl JudgeVolume{
-    pub fn new() -> io::Result<Self>{
-        let whole_dir = std::env::current_dir().expect("Failed to retrieve current dir");
+    pub async fn new(pool: &MySqlPool) -> io::Result<Self>{
+        let whole_dir = std::env::current_dir()?;
         let output_dir = whole_dir.join("user_inputs");
         let input_dir = whole_dir.join("test_cases");
         
         if input_dir.exists(){
             if let Err(error)= std::fs::remove_dir_all(&input_dir){
-                eprintln!("Failed to cleanup input directory: {error}");
+                let _ = enyay::insert_error(pool, &format!("Failed to cleanup input directory: {error}")).await;
             }
         } 
         if output_dir.exists(){
             if let Err(error) = std::fs::remove_dir_all(&output_dir){
-                eprintln!("Failed to cleanup output directory: {error}");
+                let _ = enyay::insert_error(pool, &format!("Failed to cleanup output directory: {error}")).await;
             }
         }
         std::fs::create_dir_all(&input_dir)?;
@@ -78,7 +79,7 @@ pub async fn judge_worker_loop(app_state: AppState){
         let permit = match app_state.clone().judge_limit.acquire_owned().await{
             Ok(permit) => permit,
             Err(error) =>{
-                eprintln!("Failed to acquire judge permit: {error}");
+                let _ = enyay::insert_error(&app_state.pool, &format!("Failed to acquire judge permit: {error}")).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
             }
@@ -92,7 +93,7 @@ pub async fn judge_worker_loop(app_state: AppState){
             }
             Err(error) => {
                 drop(permit);
-                eprintln!("queue claim failed: {error}");
+                let _ = enyay::insert_error(&app_state.pool, &format!("queue claim failed: {error}")).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
@@ -108,7 +109,7 @@ pub fn spawn_task(
         //makes sure we don't drop the permit before we are done
         let _permit = permit;
         if let Err(error) = judge_submission(&submission, &state).await{
-            eprintln!("Judge Failure, Submission: {} Error: {error}", submission.submission_id);
+            let _ = enyay::insert_error(&state.pool, &format!("Judge Failure, Submission: {} Error: {error}", submission.submission_id)).await;
             let _ = enyay::update_submission_verdict(
                 &state.pool,
                 submission.submission_id,

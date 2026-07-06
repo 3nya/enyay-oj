@@ -1247,6 +1247,21 @@ pub async fn claim_next_pending(
     Ok(pending_sub)
 }
 
+pub async fn insert_error(
+    pool: & MySqlPool,
+    error_message: &str
+) -> Result<i64, sqlx::Error>{
+    let result = sqlx::query(r#"
+        INSERT INTO error_log (error_message)
+        VALUES (?)
+    "#)
+    .bind(error_message)
+    .execute(pool)
+    .await?;
+
+    Ok(last_insert_id(result))
+}
+
 pub async fn cleanup_submissions(
     pool: &MySqlPool
 ) -> Result<u64, sqlx::Error>{

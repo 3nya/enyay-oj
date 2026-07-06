@@ -593,9 +593,9 @@ async function renderContestTimer(contest,token){
     status = "Active";
     timer = formatDuration(end-now);
   } else{
-    status = "Finished";
-    timer = formatDuration(0);
+    renderPlaceholder("Contest has finished", "", token);
     stopRefresh();
+    return;
   }
 
   const timerDiv = document.querySelector(".contest-countdown-header");
@@ -631,6 +631,12 @@ async function renderContestProblem(contestId,problemId, token){
   const contest = await getContest(contestId, state.dbUser.user_id);
   if(!contest.registered){
     renderPlaceholder("You are not registered for this contest", "", token);
+    return;
+  }
+  const now = Date.now();
+  const endTime = new Date(contest.end_time);
+  if(now >= endTime){
+    renderPlaceholder("Contest has finished", "", token);
     return;
   }
 
@@ -760,6 +766,13 @@ async function renderContestSubmit(contestId, problemId, token) {
     renderPlaceholder("You are not registered for this contest", "", token);
     return;
   }
+  const now = Date.now();
+  const endTime = new Date(contest.end_time);
+  if(now >= endTime){
+    renderPlaceholder("Contest has finished", "", token);
+    return;
+  }
+
   const [problem, problems, ranks] = await Promise.all([
     findContestProblem(contestId,problemId, state.dbUser.user_id),
     loadContestProblems(contestId).catch(() => []),
@@ -973,7 +986,7 @@ async function renderContestFinalRankings(contestId, token){
                 `,
               )
               .join("")
-          : `<tr><td class="empty-row" colspan="4">No contestants found.</td></tr>`
+          : `<tr><td class="empty-row" colspan="4">No contestant information found.</td></tr>`
       }
     </tbody>
   </table>

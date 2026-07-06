@@ -775,8 +775,22 @@ async fn main() -> Result<(), ApiError> {
         judge::cleanup_containers(),
         enyay::cleanup_submissions(&pool)
     );
-    container_cleanup?;
-    let judge_volume = judge::JudgeVolume::new()?;
+
+    if let Err(error) = &container_cleanup{
+        let _ = enyay::insert_error(&pool, &error.to_string()).await;
+        panic!();
+    }
+    if let Err(error) = &cleared{
+        let _ = enyay::insert_error(&pool, &error.to_string()).await;
+    }
+    let judge_volume = match judge::JudgeVolume::new(&pool).await{
+        Ok(volume) => volume,
+        Err(error) =>{
+            let _ = enyay::insert_error(&pool, &error.to_string()).await;
+            panic!();
+        }
+    };
+    
 
     match cleared{
         Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
