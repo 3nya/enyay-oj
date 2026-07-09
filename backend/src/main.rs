@@ -1,24 +1,21 @@
 mod enyay;
 mod judge;
 
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::{StatusCode, header},
-    response::{Html, IntoResponse, Response},
-    routing::{get, patch, post},
+    Json, Router, extract::{Path, State}, http::{StatusCode, header}, response::{Html, IntoResponse, Response}, routing::{get, patch, post},
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, mysql::MySqlPoolOptions};
-use tokio::net::TcpListener;
-
-use crate::{enyay::Verdict};
+use tokio::{net::TcpListener, sync::Semaphore};
 
 #[derive(Clone)]
 struct AppState {
     pool: MySqlPool,
+    judge_volume: judge::JudgeVolume,
+    judge_limit:Arc<Semaphore>
 }
 
 #[derive(Debug)]
@@ -27,7 +24,6 @@ enum ApiError {
     NotFound(String),
     Database(sqlx::Error),
     Io(std::io::Error),
-    Judge(String),
 }
 
 impl IntoResponse for ApiError {
@@ -49,13 +45,6 @@ impl IntoResponse for ApiError {
                     "server request failed".to_string(),
                 )
             }
-            Self::Judge(error) => {
-                eprintln!("judge error: {error}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("judge failed: {error}"),
-                )
-            }
         };
 
         (status, Json(ErrorResponse { error: message })).into_response()
@@ -73,6 +62,23 @@ impl From<std::io::Error> for ApiError {
         Self::Io(error)
     }
 }
+
+impl From<enyay::SubmissionError> for ApiError{
+    fn from(error: enyay::SubmissionError) -> Self{
+        match error {
+            enyay::SubmissionError::SubmissionLimitExceeded(message) =>{
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::SubmissionCoolDown(message) => {
+                return Self::BadRequest(message);
+            }
+            enyay::SubmissionError::TransactionFailed(err) =>{
+                return Self::Database(err)
+            }
+        }
+    }
+}
+
 
 #[derive(Serialize)]
 struct ErrorResponse {
@@ -96,6 +102,14 @@ struct CreateUserRequest {
 }
 
 #[derive(Deserialize)]
+struct CreateContestRequest {
+    contest_name: String,
+    host: String,
+    start_time: chrono::DateTime<Utc>,
+    end_time: chrono::DateTime<Utc>
+}
+
+#[derive(Deserialize)]
 struct CreateProblemRequest {
     problem_name: String,
     runtime_ms: i64,
@@ -104,6 +118,7 @@ struct CreateProblemRequest {
     problem_statement: String,
     judge_type: String,
     validator_code: Option<String>,
+    is_public: bool
 }
 
 #[derive(Deserialize)]
@@ -114,12 +129,8 @@ struct CreateTestCaseRequest {
 
 #[derive(Deserialize)]
 struct CreateSubmissionRequest {
-    submission_id: Option<i64>,
     user_id: i64,
     problem_id: i64,
-    verdict: Option<String>,
-    runtime_ms: Option<i64>,
-    memory_kb: Option<i64>,
     language: Option<String>,
     source_code: String,
 }
@@ -308,7 +319,8 @@ async fn create_problem(
         payload.problem_rating,
         &payload.problem_statement,
         judge_type,
-        &validator_code
+        &validator_code,
+        payload.is_public
     )
     .await?;
 
@@ -335,21 +347,231 @@ async fn create_testcase(
     Ok((StatusCode::CREATED,Json(IdResponse { id })))
 }
 
+async fn get_problem_for_user(
+    State(state): State<AppState>,
+    Path((problem_id,user_id)): Path<(i64,i64)>,
+) -> Result<Json<enyay::PublicProblem>, ApiError> {
+    let problem = enyay::get_public_problem(&state.pool, problem_id,Some(user_id))
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
+    Ok(Json(problem))
+}
+
 async fn get_problem(
     State(state): State<AppState>,
     Path(problem_id): Path<i64>,
 ) -> Result<Json<enyay::PublicProblem>, ApiError> {
-    let problem = enyay::get_public_problem(&state.pool, problem_id)
+    let problem = enyay::get_public_problem(&state.pool, problem_id,None)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found")))?;
-
     Ok(Json(problem))
+}
+
+async fn get_contest_problem(
+    State(state): State<AppState>,
+    Path((contest_id,problem_id, user_id)): Path<(i64,i64,i64)>
+) -> Result<Json<enyay::PublicProblem>, ApiError>{
+    if let Some(contest) = enyay::get_contest(&state.pool, contest_id, Some(user_id)).await?{
+        if !contest.registered{
+            return Err(ApiError::BadRequest(format!("you are not registered for contest {contest_id}")));
+        } else{
+            return Ok(Json(
+                enyay::get_contest_public_problem(&state.pool, problem_id, user_id, contest_id)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(format!("problem {problem_id} not found in contest {contest_id}")))?
+            ));
+        }
+    }
+    Err(ApiError::NotFound(format!("contest {contest_id} does not exist")))
 }
 
 async fn get_recent_problems(
     State(state): State<AppState>,
+    user_id: Option<Path<i64>>
 ) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError> {
-    Ok(Json(enyay::get_recent_problems(&state.pool, 20).await?))
+    match user_id {
+        Some(Path(user_id)) => return Ok(Json(enyay::get_recent_problems(&state.pool,Some(user_id), 20).await?)),
+        None => return Ok(Json(enyay::get_recent_problems(&state.pool,None, 20).await?))
+    }
+}
+
+async fn get_user_contest_problems(
+    State(state): State<AppState>,
+    Path((contest_id, user_id)): Path<(i64,i64)>
+) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,Some(user_id)).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
+    }
+    Ok(Json(enyay::get_contest_problems(&state.pool, Some(user_id),contest_id).await?))
+}
+
+async fn get_contest_problems(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::PublicProblem>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,None).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
+    }
+    Ok(Json(enyay::get_contest_problems(&state.pool, None, contest_id).await?))
+}
+
+async fn create_contest(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateContestRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError>{
+    if payload.contest_name.is_empty() {
+        return Err(ApiError::BadRequest(
+            "contests must have a name!".to_string()
+        ))
+    }
+
+    if payload.start_time >= payload.end_time{
+        return Err(ApiError::BadRequest(
+            "contest start time must be before end time".to_string()
+        ));
+    }
+
+    let now = Utc::now();
+    if payload.start_time <= now{
+        return Err(ApiError::BadRequest(
+            "contests cannot be started before it has been created!".to_string()
+        ));
+    }
+    if payload.end_time <= now{
+        return Err(ApiError::BadRequest(
+            "contests cannot be finished before it is created!".to_string()
+        ));
+    }
+
+    let id = enyay::create_contest(
+        &state.pool, 
+        &payload.contest_name, 
+        &payload.host, 
+        &payload.start_time, 
+        &payload.end_time
+    ).await?;
+
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn get_recent_contests(
+    State(state): State<AppState>
+) -> Result<Json<Vec<enyay::Contest>>, ApiError>{
+    Ok(Json(enyay::get_recent_contests(&state.pool, None,20).await?))
+}
+
+async fn get_recent_user_contests(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>
+) -> Result<Json<Vec<enyay::Contest>>, ApiError>{
+    Ok(Json(enyay::get_recent_contests(&state.pool, Some(user_id), 20).await?))
+}
+
+async fn assign_problem_to_contest(
+    State(state): State<AppState>,
+    Path((contest_id,problem_id,problem_order)): Path<(i64,i64,String)>
+) -> Result<StatusCode,ApiError> {
+    if problem_order.len() > 1 {
+        return Err(ApiError::BadRequest("problem order must be exactly 1 character, A-Z".to_string()));
+    }
+    for order_char in problem_order.chars(){
+        if !order_char.is_alphabetic(){
+            return Err(ApiError::BadRequest("problem order must be exactly 1 character, A-Z".to_string()));
+        }
+    }
+
+    let contest = enyay::get_contest(&state.pool, contest_id, None).await?;
+    let contest = match contest{
+        Some(existing_contest) => existing_contest,
+        None => return Err(ApiError::BadRequest(format!("contest {} does not exist",contest_id)))
+    };
+
+    let now = Utc::now();
+    if contest.start_time <= now{
+        return Err(ApiError::BadRequest("questions must be assigned before a contest begins!".to_string()));
+    }
+
+    match enyay::get_problem(&state.pool, problem_id).await?{
+        Some(_) => {
+            let affected = enyay::assign_contest_problems(&state.pool, contest_id, problem_id, &problem_order).await?;
+            if affected == 0{
+                return Err(ApiError::BadRequest(
+                    "problem order must be unique for each contest".to_string()
+                ));
+            }
+        }
+        None => return Err(ApiError::BadRequest(format!("problem {} does not exist!",problem_id)))
+    }
+
+    Ok(StatusCode::CREATED)
+}
+
+async fn register_contest(
+    State(state): State<AppState>,
+    Path((contest_id, user_id)): Path<(i64,i64)>
+) -> Result<StatusCode, ApiError> {
+    match enyay::get_contest(&state.pool, contest_id, Some(user_id)).await?{
+        Some(contest) => {
+            if Utc::now() < contest.start_time{
+                let affected = enyay::register_contest(&state.pool, contest_id, user_id).await?;
+                if affected >= 1{
+                    return Ok(StatusCode::CREATED);
+                } else{
+                    return Err(ApiError::BadRequest(
+                        format!("user {} already registered",user_id)
+                    ));
+                }
+            } else{
+                return Err(ApiError::BadRequest(
+                    "you cannot register a contest that has ended or is in progress".to_string()
+                ));
+            }
+        }
+        None =>{
+            return Err(ApiError::BadRequest(
+                format!("contest {} does not exist!",contest_id)
+            ))
+        }
+    }
+}
+
+async fn get_contest(
+    State(state): State<AppState>,
+    Path((contest_id,user_id)): Path<(i64, i64)>
+) -> Result<Json<enyay::Contest>, ApiError>{
+    let contest = enyay::get_contest(&state.pool, contest_id, Some(user_id))
+    .await?;
+    match contest{
+        Some(contest) =>{
+            return Ok(Json(contest));
+        } 
+        None => return Err(ApiError::NotFound(format!("contest {contest_id} does not exist")))
+    }
+}
+
+async fn get_contest_rankings(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::UserRanking>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,None).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist",contest_id)));
+    }
+    return Ok(Json(enyay::get_contest_rankings(&state.pool, contest_id, 20).await?))
+}
+
+async fn get_contest_final_ranking(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::FinalRanking>>, ApiError>{
+    match enyay::get_contest(&state.pool, contest_id, None).await?{
+        None => return Err(ApiError::NotFound(format!("contest {contest_id} does not exist"))),
+        Some(contest) =>{
+            if Utc::now() < contest.end_time{
+                return Err(ApiError::BadRequest(format!("contest {contest_id} is still ongoing")))
+            }
+        }
+    }
+    Ok(Json(enyay::get_contest_final_ranking(&state.pool, contest_id, 20).await?))
 }
 
 async fn create_submission(
@@ -362,40 +584,59 @@ async fn create_submission(
         ));
     }
 
-    let verdict = parse_verdict(payload.verdict.as_deref().unwrap_or("PENDING"))?;
     let language = payload.language.as_deref();
 
-    let id = match payload.submission_id {
-        Some(submission_id) => {
-            enyay::insert_submission_with_id(
+    let id = enyay::insert_submission(
                 &state.pool,
-                submission_id,
                 payload.user_id,
                 payload.problem_id,
-                verdict,
-                payload.runtime_ms,
-                payload.memory_kb,
+                enyay::Verdict::Pending,
+                None,
+                None,
                 language,
                 &payload.source_code,
-            )
-            .await?;
+                None
+    )
+    .await?;
 
-            submission_id
-        }
-        None => {
-            enyay::insert_submission(
-                &state.pool,
-                payload.user_id,
-                payload.problem_id,
-                verdict,
-                payload.runtime_ms,
-                payload.memory_kb,
-                language,
-                &payload.source_code,
-            )
-            .await?
-        }
+    Ok((StatusCode::CREATED, Json(IdResponse { id })))
+}
+
+async fn create_contest_submission(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>,
+    Json(payload): Json<CreateSubmissionRequest>
+) -> Result<(StatusCode, Json<IdResponse>), ApiError>{
+    let contest_requested = enyay::find_registered_contest(&state.pool, payload.user_id, contest_id).await?;
+    let contest = match contest_requested{
+        None => return Err(ApiError::BadRequest(format!("you did not register for contest {}",contest_id))),
+        Some(contest) => contest
     };
+
+    let now = Utc::now();
+    if contest.start_time > now || contest.end_time <= now {
+        return Err(ApiError::BadRequest(
+            format!("contest {} is not currently active",contest_id)
+        ));
+    }
+
+    if !enyay::problem_in_contest(&state.pool, contest_id, payload.problem_id).await?{
+        return Err(ApiError::BadRequest(
+            format!("problem {} is not a part of contest {}", payload.problem_id, contest_id)
+        ));
+    }
+    
+    let id = enyay::insert_submission(
+        &state.pool, 
+        payload.user_id, 
+        payload.problem_id, 
+        enyay::Verdict::Pending, 
+        None, 
+        None, 
+        payload.language.as_deref(), 
+        &payload.source_code, 
+        Some(contest_id)
+    ).await?;
 
     Ok((StatusCode::CREATED, Json(IdResponse { id })))
 }
@@ -421,21 +662,66 @@ async  fn get_recent_submissions_by_user(
     State(state): State<AppState>,
     Path(user_id): Path<i64>
 ) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError> {
+    if enyay::get_user(&state.pool, user_id).await?.is_none(){
+        return Err(ApiError::NotFound(format!("user {} does not exist",user_id)));
+    }
     Ok(Json(enyay::get_recent_submissions_by_user(&state.pool, user_id, 20).await?))
 }
 
-async fn judge_submission(
+async fn get_recent_contest_submissions(
+    State(state): State<AppState>,
+    Path(contest_id): Path<i64>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,None).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist", contest_id)));
+    }
+    Ok(Json(enyay::get_contest_submissions(&state.pool, contest_id,20).await?))
+}
+
+async fn get_recent_user_contest_submission(
+    State(state): State<AppState>,
+    Path((contest_id,user_id)): Path<(i64,i64)>
+) -> Result<Json<Vec<enyay::SubmissionStatus>>, ApiError>{
+    if enyay::get_contest(&state.pool, contest_id,Some(user_id)).await?.is_none(){
+        return Err(ApiError::NotFound(format!("contest {} does not exist", contest_id)));
+    }
+    if enyay::get_user(&state.pool, user_id).await?.is_none(){
+        return Err(ApiError::NotFound(format!("user {} does not exist",user_id)));
+    }
+    Ok(Json(enyay::get_contest_user_submissions(&state.pool, contest_id, user_id, 20).await?))
+}
+
+//maybe we can use this for a future admin panel to manually rejudge specific submissions
+async fn rejudge_submission(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let submission = enyay::get_submission(&state.pool, submission_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("submission {submission_id} not found")))?;
-
-    let judge_volume = judge::JudgeVolume::new()?;
-    judge::judge_submission(&submission, &judge_volume, &state)
-        .await
-        .map_err(|error| ApiError::Judge(error.to_string()))?;
+    match enyay::get_submission(&state.pool, submission_id).await?{
+        Some(submission) => {
+            if submission.verdict != "PENDING" && submission.verdict != "JUDGING"{
+                enyay::update_submission_verdict(
+                    &state.pool, 
+                    submission_id, 
+                    None,
+                    None,
+                    None,
+                    enyay::Verdict::Pending, 
+                    None, 
+                    None
+                )
+                .await
+                .map_err(|_| ApiError::BadRequest(
+                    format!("Failed to rejudge submission {submission_id}. Are you sure it exists?")
+                ))?;
+            } else{
+                return Err(
+                    ApiError::BadRequest("You cannot rejudge a submission that is currently being judged!"
+                    .to_string()
+                ));
+            }
+        }
+        None => return Err(ApiError::NotFound(format!("Submission {} does not exist!",submission_id)))
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -449,6 +735,9 @@ async fn update_submission_verdict(
     let rows_affected = enyay::update_submission_verdict(
         &state.pool,
         submission_id,
+        None,
+        None,
+        None,
         verdict,
         payload.runtime_ms,
         payload.memory_kb,
@@ -464,8 +753,8 @@ async fn update_submission_verdict(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_verdict(value: &str) -> Result<Verdict, ApiError> {
-    Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
+fn parse_verdict(value: &str) -> Result<enyay::Verdict, ApiError> {
+    enyay::Verdict::from_str(value).map_err(|error| ApiError::BadRequest(error.to_string()))
 }
 
 #[tokio::main]
@@ -481,9 +770,67 @@ async fn main() -> Result<(), ApiError> {
         .connect(&db_url)
         .await?;
     println!("connected to database");
-    judge::cleanup_containers().await?;
+
+    let (container_cleanup, cleared) = tokio::join!(
+        judge::cleanup_containers(),
+        enyay::cleanup_submissions(&pool)
+    );
+
+    if let Err(error) = &container_cleanup{
+        let _ = enyay::insert_error(&pool, &error.to_string()).await;
+        panic!();
+    }
+    if let Err(error) = &cleared{
+        let _ = enyay::insert_error(&pool, &error.to_string()).await;
+    }
+    let judge_volume = match judge::JudgeVolume::new(&pool).await{
+        Ok(volume) => volume,
+        Err(error) =>{
+            let _ = enyay::insert_error(&pool, &error.to_string()).await;
+            panic!();
+        }
+    };
+    
+
+    match cleared{
+        Ok(count) => eprintln!("{} stale submissions restored to pending verdict", count),
+        Err(_) => eprintln!("failed to cleanup stale submissions")
+    }
+
+    let app_state = AppState{
+        pool, 
+        judge_volume, 
+        judge_limit: Arc::new(Semaphore::new(1))
+    };
+
+    let worker_count = 1;
+    for _ in 0..worker_count{
+        let worker_state = app_state.clone();
+        tokio::spawn(async move{
+            judge::judge_worker_loop(worker_state).await;
+        });
+    }
+
+    let contest_pool = app_state.pool.clone();
+    tokio::spawn(async move{
+        loop {
+            if let Err(error) = enyay::manage_contests(contest_pool.clone()).await{
+                eprintln!("contest activiation failed: {}", error);
+            }
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+
     let app = Router::new()
         .route("/", get(frontend_index))
+        .route("/contests/{contest_id}/problemset/problem/{problem_id}", get(frontend_index))
+        .route("/contests/{contest_id}/status/my",get(frontend_index))
+        .route("/contests/{contest_id}/status", get(frontend_index))
+        .route("/contests/{contest_id}/submit/{problem_id}",get(frontend_index))
+        .route("/contests/{contest_id}/registration",get(frontend_index))
+        .route("/contests/{contest_id}/home", get(frontend_index))
+        .route("/contests/{contest_id}/finalranks",get(frontend_index))
+        .route("/contests", get(frontend_index))
         .route("/problemset", get(frontend_index))
         .route("/problemset/problem/{problem_id}", get(frontend_index))
         .route("/submit", get(frontend_index))
@@ -504,20 +851,36 @@ async fn main() -> Result<(), ApiError> {
         .route("/users/by-uid/{uid}", get(get_user_by_uid))
         .route("/users/{user_id}", get(get_user))
         .route("/problems", post(create_problem))
+        .route("/problems/all/{user_id}", get(get_recent_problems))
         .route("/problems/all", get(get_recent_problems))
+        .route("/problems/{problem_id}/{user_id}", get(get_problem_for_user))
         .route("/problems/{problem_id}", get(get_problem))
         .route("/problems/{problem_id}/example",get(get_example_test))
         .route("/problems/{problem_id}/testcases", post(create_testcase))
         .route("/submissions", post(create_submission))
         .route("/submissions/recent", get(get_recent_submissions))
         .route("/submissions/{submission_id}", get(get_submission))
-        .route("/submissions/{submission_id}/judge", post(judge_submission))
+        .route("/submissions/{submission_id}/judge", post(rejudge_submission))
         .route("/submissions/recent/{user_id}", get(get_recent_submissions_by_user))
         .route(
             "/submissions/{submission_id}/verdict",
             patch(update_submission_verdict),
         )
-        .with_state(AppState { pool });
+        .route("/contests/{contest_id}/registrations/{user_id}",post(register_contest))
+        .route("/contests/problems/{contest_id}/{problem_id}/{problem_order}", post(assign_problem_to_contest))
+        .route("/contests/{contest_id}/submissions/recent/{user_id}",get(get_recent_user_contest_submission))
+        .route("/contests/{contest_id}/submissions/recent",get(get_recent_contest_submissions))
+        .route("/contests/{contest_id}/submissions", post(create_contest_submission))
+        .route("/contests/{contest_id}/rankings",get(get_contest_rankings))
+        .route("/contests/{contest_id}/inactive/finalrankings",get(get_contest_final_ranking))
+        .route("/contests/{contest_id}/problemset/problem/{problem_id}/{user_id}", get(get_contest_problem))
+        .route("/contests/{contest_id}/problemset/{user_id}", get(get_user_contest_problems))
+        .route("/contests/{contest_id}/problemset", get(get_contest_problems))
+        .route("/contests/recent/{user_id}", get(get_recent_user_contests))
+        .route("/contests/create", post(create_contest))
+        .route("/contests/recent", get(get_recent_contests))
+        .route("/contests/{contest_id}/user/{user_id}", get(get_contest))
+        .with_state(app_state);
 
     let addr = bind_addr
         .parse::<SocketAddr>()
